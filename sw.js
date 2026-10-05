@@ -1,5 +1,5 @@
 // Cache de l'interface pour un démarrage rapide. Les données passent toujours par le réseau.
-const CACHE = "tribu-v6";
+const CACHE = "tribu-v7";
 const ASSETS = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {

@@ -252,14 +252,50 @@
           const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + (invite ? "?code=" + invite : "") } });
           if (error) throw error;
           if (!data.session) {
-            form.innerHTML = `<h3>Vérifie ta boîte mail</h3><p class="muted">Un lien de confirmation a été envoyé à ${esc(email)}. Clique dessus, puis reviens te connecter.</p><button class="btn block" type="button" id="back">Se connecter</button>`;
-            document.getElementById("back").onclick = () => renderAuth("login");
+            waitForConfirmation(form, email, password);
           }
         }
       } catch (ex) {
         err.hidden = false; err.textContent = errMsg(ex);
       } finally { btn.disabled = false; }
     };
+  }
+
+  // Après l'inscription : la connexion se fait toute seule dès que l'email est confirmé,
+  // sans dépendre de la page vers laquelle le lien du mail redirige.
+  function waitForConfirmation(form, email, password) {
+    form.innerHTML = `<h3>Confirme ton email</h3>
+      <ol class="steps">
+        <li><span>Ouvre le mail envoyé à <strong>${esc(email)}</strong> et appuie sur le lien de confirmation.</span></li>
+        <li><span>Si le lien ouvre une page d'erreur, ce n'est pas grave : ton compte est bien confirmé. Ferme-la.</span></li>
+        <li><span>Reviens ici : la connexion se fait automatiquement.</span></li>
+      </ol>
+      <p class="muted small" id="wait-status">En attente de la confirmation...</p>
+      <button class="btn block" type="button" id="wait-retry">J'ai confirmé, me connecter</button>
+      <button class="link small" type="button" id="wait-resend">Renvoyer le mail</button>
+      <button class="link small muted" type="button" id="wait-back">Utiliser une autre adresse</button>`;
+    let done = false, timer;
+    const stop = () => { done = true; clearInterval(timer); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", attempt); };
+    async function attempt(manual) {
+      if (done) return;
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (data && data.session) return stop();
+      if (manual === true) {
+        const st = document.getElementById("wait-status");
+        if (st) st.textContent = error && /not confirmed/i.test(error.message) ? "Pas encore confirmé. Appuie sur le lien du mail, puis réessaie." : errMsg(error);
+      }
+    }
+    const onVis = () => { if (document.visibilityState === "visible") attempt(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", attempt);
+    timer = setInterval(attempt, 5000);
+    setTimeout(stop, 30 * 60 * 1000);
+    document.getElementById("wait-retry").onclick = () => attempt(true);
+    document.getElementById("wait-resend").onclick = async () => {
+      const { error } = await sb.auth.resend({ type: "signup", email });
+      toast(error ? errMsg(error) : "Mail renvoyé");
+    };
+    document.getElementById("wait-back").onclick = () => { stop(); renderAuth("signup"); };
   }
 
   // ---------- Onboarding ----------

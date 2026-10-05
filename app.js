@@ -23,10 +23,10 @@
 
   // ---------- Utils ----------
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const toast = (msg) => {
+  const toast = (msg, ms = 2200) => {
     const t = document.getElementById("toast");
     t.textContent = msg; t.classList.add("show");
-    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2200);
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), ms);
   };
   const childById = (id) => state.children.find((c) => c.id === id);
   const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -152,13 +152,64 @@
     : esc(c.emoji);
 
   // Redimensionne la photo côté téléphone avant envoi (600 px, JPEG) : rapide et léger.
+  async function loadImage(file) {
+    try { return await createImageBitmap(file); } catch (_) {}
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image(); img.src = url;
+      await (img.decode ? img.decode() : new Promise((ok, ko) => { img.onload = ok; img.onerror = ko; }));
+      return img;
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
   async function resizePhoto(file, max = 600) {
-    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const r = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    const w = Math.round(bmp.width * r), h = Math.round(bmp.height * r);
-    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
-    cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
-    return await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+    try {
+      const src = await loadImage(file);
+      const sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
+      const r = Math.min(1, max / Math.max(sw, sh));
+      const w = Math.round(sw * r), h = Math.round(sh * r);
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(src, 0, 0, w, h);
+      const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+      if (blob) return blob;
+    } catch (_) {}
+    // Dernier recours : envoyer l'image telle quelle si elle est légère
+    if (/^image\/(jpeg|png|webp)$/.test(file.type) && file.size < 3 * 1024 * 1024) return file;
+    throw new Error("image illisible");
+  }
+
+  // Album : un appui sur "+ Photo", on choisit, c'est envoyé
+  async function uploadAlbum(childId, fileList) {
+    const files = [...fileList].slice(0, 30);
+    if (!files.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    let ok = 0, failed = 0, quota = false;
+    for (let i = 0; i < files.length; i++) {
+      progress(`Envoi des photos : ${i + 1} sur ${files.length}`);
+      const f = files[i];
+      try {
+        const blob = await resizePhoto(f, 1600);
+        let date = today;
+        if (f.lastModified) { const d = new Date(f.lastModified).toISOString().slice(0, 10); if (d <= today) date = d; }
+        const path = `${state.household.id}/${childId}/album/${Date.now()}-${i}.jpg`;
+        const up = await sb.storage.from("child-photos").upload(path, blob, { contentType: blob.type || "image/jpeg" });
+        if (up.error) throw up.error;
+        const { error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: childId, path, taken_on: date, created_by: state.session.user.id });
+        if (error) { await sb.storage.from("child-photos").remove([path]); if (/quota/i.test(error.message)) { quota = true; break; } throw error; }
+        ok++;
+      } catch (_) { failed++; }
+    }
+    progress(null);
+    await loadAll(); render();
+    let msg = ok ? `${ok} photo${ok > 1 ? "s" : ""} ajoutée${ok > 1 ? "s" : ""}. Appuie sur une photo pour ajouter une note.` : "Aucune photo ajoutée.";
+    if (quota) msg = "L'album de ta tribu est plein (100 photos). " + (ok ? `${ok} ajoutée${ok > 1 ? "s" : ""}.` : "");
+    else if (failed) msg += ` ${failed} n'a pas pu être envoyée${failed > 1 ? "s" : ""}.`;
+    toast(msg, 4500);
+  }
+  function progress(msg) {
+    let bar = document.getElementById("progress");
+    if (!msg) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = document.createElement("div"); bar.id = "progress"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+    bar.textContent = msg;
   }
 
   function subscribe() {
@@ -583,7 +634,7 @@
     const album = state.photos.filter((p) => p.child_id === id);
     html += `<h2>📸 Album</h2>
       <div class="album">
-        <button class="album-add" data-album-add="${c.id}" aria-label="Ajouter une photo à l'album"><span>+</span>Photo</button>
+        <label class="album-add file-tap"><input type="file" accept="image/*" multiple data-album-input="${c.id}" aria-label="Ajouter des photos à l'album"><span>+</span>Photos</label>
         ${album.map((p) => `<button class="album-cell" data-photo="${p.id}" aria-label="Voir la photo du ${new Date(p.taken_on).toLocaleDateString("fr-FR")}">
           ${state.photoUrls[p.path] ? `<img src="${esc(state.photoUrls[p.path])}" alt="" loading="lazy">` : ""}
           ${p.note ? `<span class="album-note">${esc(p.note)}</span>` : ""}</button>`).join("")}
@@ -1195,8 +1246,7 @@
         <div style="display:flex;align-items:center;gap:14px">
           <div id="cf-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:${esc(c.color)};display:grid;place-items:center;font-size:2rem;flex:0 0 auto">${child ? avatar(child) : esc(c.emoji)}</div>
           <div style="display:flex;flex-direction:column;align-items:flex-start">
-            <label class="btn ghost" style="margin:0;font-size:.95rem" for="cf-file">${child && child.photo_path ? "Changer la photo" : "Choisir une photo"}</label>
-            <input id="cf-file" type="file" accept="image/*" hidden>
+            <label class="btn ghost file-tap" style="margin:0;font-size:.95rem"><input id="cf-file" type="file" accept="image/*">${child && child.photo_path ? "Changer la photo" : "Choisir une photo"}</label>
             <button type="button" class="link small" id="cf-rmphoto" ${child && child.photo_path ? "" : "hidden"}>Retirer la photo</button>
           </div>
         </div>
@@ -1373,7 +1423,7 @@
       const open = () => { const [aid, date] = b.dataset.occ.split("|"); occSheet(state.activities.find((x) => x.id === aid), date); };
       b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); };
     });
-    $app.querySelectorAll("[data-album-add]").forEach((b) => b.onclick = () => photoForm(b.dataset.albumAdd));
+    $app.querySelectorAll("[data-album-input]").forEach((inp) => inp.onchange = () => { const files = inp.files; uploadAlbum(inp.dataset.albumInput, files).finally(() => { inp.value = ""; }); });
     $app.querySelectorAll("[data-photo]").forEach((b) => b.onclick = () => photoForm(null, state.photos.find((p) => p.id === b.dataset.photo)));
     $app.querySelectorAll("[data-cal]").forEach((b) => b.onclick = () => calSheet(b.dataset.cal));
     const cr = document.getElementById("cal-reset");

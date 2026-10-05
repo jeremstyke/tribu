@@ -218,6 +218,7 @@
           <button class="link" type="button" id="switch">${isLogin ? "Pas encore de compte ? Créer un compte" : "Déjà un compte ? Se connecter"}</button>
           ${isLogin ? `<button class="link small" type="button" id="forgot">Mot de passe oublié</button>` : ""}
         </form>
+        ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:14px">📲 Comment installer Tribu sur mon téléphone</button>` : ""}
       </div>`;
     const form = document.getElementById("auth");
     const err = document.getElementById("err");
@@ -226,6 +227,7 @@
       b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>${isLogin ? "Connecte-toi" : "Crée ton compte"} pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
     });
     document.getElementById("switch").onclick = () => renderAuth(isLogin ? "signup" : "login");
+    $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
     const forgot = document.getElementById("forgot");
     if (forgot) forgot.onclick = async () => {
       const email = document.getElementById("email").value.trim();
@@ -326,6 +328,7 @@
       history.replaceState(null, "", location.pathname + "#/accueil");
       await loadHousehold(); render();
       toast("Bienvenue dans " + pv.household_name);
+      if (!isStandalone()) setTimeout(installSheet, 900);
     };
   }
 
@@ -389,7 +392,13 @@
 
     let html = `
       <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date">${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
-      ${chipsHtml()}`;
+      ${chipsHtml()}
+      ${!isStandalone() && !ls.get("tribu_install_hidden") ? `<div class="install-banner">
+        <span class="ib-ico" aria-hidden="true">📲</span>
+        <div class="ib-text"><strong>Installe Tribu</strong><br><span class="small">Elle s'ouvrira comme une vraie app depuis ton écran d'accueil.</span></div>
+        <button class="btn" data-install-help>Voir comment</button>
+        <button class="ib-close" id="install-dismiss" aria-label="Masquer">×</button>
+      </div>` : ""}`;
 
     if (!state.children.length) {
       html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
@@ -483,8 +492,6 @@
 
   function viewSettings() {
     const link = location.origin + location.pathname + "?code=" + state.household.invite_code;
-    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     return `<header class="top"><h1>Tribu</h1></header>
       <div class="card">
         <h3>Inviter l'autre parent</h3>
@@ -501,7 +508,7 @@
       </div>
       <h2>Membres</h2>
       <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}${m.user_id === state.session.user.id ? " (toi)" : ""}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
-      ${!standalone ? `<div class="install"><strong>Installer Tribu sur ton téléphone</strong><p class="muted small" style="margin:4px 0 0">${isIOS ? "Dans Safari, appuie sur Partager puis Sur l'écran d'accueil." : "Dans le menu du navigateur, choisis Installer l'application."}</p>${state.installPrompt ? `<button class="btn" style="margin-top:10px" id="install">Installer</button>` : ""}</div>` : ""}
+      ${!isStandalone() ? `<h2>Application</h2><div class="card"><p class="muted small" style="margin-top:0">Installe Tribu sur ton écran d'accueil : elle s'ouvre comme une vraie application, en plein écran, sans passer par le navigateur.</p><button class="btn block" data-install-help>📲 Installer Tribu sur mon téléphone</button></div>` : ""}
       ${state.memberships.length > 1 ? `<h2>Mes tribus</h2><div class="card">${state.memberships.map((m) => `<div class="member"><span>${esc(m.households ? m.households.name : "Tribu")}</span>${m.household_id === state.household.id ? `<span class="muted small">Actuelle</span>` : `<button class="link small" style="padding:0" data-switch="${m.household_id}">Ouvrir</button>`}</div>`).join("")}</div>` : ""}
       <h2>Compte</h2>
       <p class="muted small">${esc(state.session.user.email)}</p>
@@ -523,6 +530,68 @@
       <button class="btn ghost block" style="margin-top:10px" id="cal-copy">Copier le lien</button>
       <p class="muted small" style="margin-top:14px">Les mises à jour arrivent automatiquement : en moins d'une heure sur iPhone, parfois quelques heures sur Google Agenda. Ce lien est personnel à ta tribu, ne le publie pas.</p>`, (el) => {
       el.querySelector("#cal-copy").onclick = async () => { await navigator.clipboard.writeText(https); toast("Lien copié"); };
+    });
+  }
+
+  // ---------- Installation ----------
+  const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  function detectEnv() {
+    const ua = navigator.userAgent;
+    const ios = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const android = /android/i.test(ua);
+    // Navigateurs intégrés (WhatsApp, Telegram, Messenger, Instagram...) : installation impossible
+    const inApp = /FBAN|FBAV|Instagram|Line\/|Telegram|WhatsApp|Snapchat|; wv\)/i.test(ua) || (ios && !/Safari\//.test(ua));
+    const iosOther = ios && /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    const samsung = /SamsungBrowser/i.test(ua);
+    return { ios, android, inApp, iosOther, samsung };
+  }
+  const SHARE_ICON = `<svg class="ico-inline" viewBox="0 0 24 24" aria-label="icône Partager"><path d="M12 3v12M8 7l4-4 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 11v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+  const steps = (list) => `<ol class="steps">${list.map((x) => `<li><span>${x}</span></li>`).join("")}</ol>`;
+
+  function installSheet() {
+    const env = detectEnv();
+    let body = "";
+    if (env.inApp) {
+      body = `<p>Tu as ouvert Tribu depuis une autre application (WhatsApp, Telegram, Messenger...). Elle ne permet pas d'installer Tribu.</p>
+        ${steps([
+          `Appuie sur le menu de cette page (<strong>⋯</strong> ou <strong>⋮</strong>, souvent en haut à droite).`,
+          `Choisis <strong>Ouvrir dans ${env.ios ? "Safari" : "Chrome"}</strong> (ou "Ouvrir dans le navigateur").`,
+          `Appuie à nouveau sur "Installer Tribu" et suis les étapes.`
+        ])}
+        <button class="btn ghost block" id="copy-url">Copier l'adresse de Tribu</button>
+        <p class="muted small">Tu peux aussi la coller dans ${env.ios ? "Safari" : "Chrome"}.</p>`;
+    } else if (env.ios) {
+      body = `${env.iosOther ? `<p class="muted small">Le plus simple est d'utiliser <strong>Safari</strong>. Dans ce navigateur, l'option se trouve aussi dans le bouton Partager.</p>` : ""}
+        ${steps([
+          `Appuie sur le bouton <strong>Partager</strong> ${SHARE_ICON} ${env.iosOther ? "dans la barre d'adresse" : "en bas de l'écran (ou en haut sur iPad)"}.`,
+          `Fais défiler et appuie sur <strong>Sur l'écran d'accueil</strong>.`,
+          `Appuie sur <strong>Ajouter</strong> en haut à droite.`,
+          `Ouvre Tribu depuis la nouvelle icône sur ton écran d'accueil.`
+        ])}
+        <p class="muted small">Dans l'app installée, connecte-toi une fois avec ton email : ta tribu et toutes ses données seront là.</p>`;
+    } else if (env.android) {
+      body = `${state.installPrompt ? `<button class="btn block" id="install-now">Installer maintenant</button><p class="muted small" style="text-align:center">ou manuellement :</p>` : ""}
+        ${steps(env.samsung ? [
+          `Appuie sur le menu <strong>≡</strong> en bas à droite.`,
+          `Choisis <strong>Ajouter la page à</strong>, puis <strong>Écran d'accueil</strong>.`,
+          `Ouvre Tribu depuis la nouvelle icône.`
+        ] : [
+          `Appuie sur le menu <strong>⋮</strong> en haut à droite de Chrome.`,
+          `Choisis <strong>Installer l'application</strong> (ou <strong>Ajouter à l'écran d'accueil</strong>).`,
+          `Confirme avec <strong>Installer</strong>, puis ouvre Tribu depuis la nouvelle icône.`
+        ])}`;
+    } else {
+      body = `${state.installPrompt ? `<button class="btn block" id="install-now">Installer maintenant</button>` : ""}
+        <p>Sur ordinateur, avec Chrome ou Edge : clique sur l'icône d'installation à droite de la barre d'adresse, puis sur <strong>Installer</strong>.</p>
+        <p class="muted small">Sur ton téléphone, ouvre ${esc(location.origin + location.pathname)} et appuie sur "Installer Tribu".</p>`;
+    }
+    openSheet(`<h2 style="margin-top:0">Installer Tribu</h2>${body}
+      <button class="btn ghost block" style="margin-top:14px" id="install-close">J'ai compris</button>`, (el) => {
+      el.querySelector("#install-close").onclick = closeSheet;
+      const now = el.querySelector("#install-now");
+      if (now) now.onclick = async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice.catch(() => {}); state.installPrompt = null; closeSheet(); render(); };
+      const cp = el.querySelector("#copy-url");
+      if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText(location.origin + location.pathname); toast("Adresse copiée"); } catch (_) { toast(location.origin + location.pathname); } };
     });
   }
 
@@ -816,6 +885,9 @@
     };
     const inst = document.getElementById("install");
     if (inst) inst.onclick = async () => { state.installPrompt.prompt(); state.installPrompt = null; render(); };
+    $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
+    const ib = document.getElementById("install-dismiss");
+    if (ib) ib.onclick = () => { ls.set("tribu_install_hidden", "1"); render(); };
     const lo = document.getElementById("logout"); if (lo) lo.onclick = () => sb.auth.signOut();
     $app.querySelectorAll("[data-switch]").forEach((b) => b.onclick = async () => {
       ls.set(HID_KEY, b.dataset.switch); state.filter = "all";
@@ -834,6 +906,7 @@
   // ---------- Boot ----------
   window.addEventListener("hashchange", () => { closeSheet(); render(); window.scrollTo(0, 0); });
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; });
+  window.addEventListener("appinstalled", () => { state.installPrompt = null; closeSheet(); toast("Tribu est installée"); });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
   let booted = false;

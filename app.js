@@ -704,7 +704,8 @@
       <p class="muted small">${esc(state.session.user.email)}</p>
       <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
       <button class="btn ghost block" style="margin-top:10px" id="logout">Se déconnecter</button>
-      <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>`;
+      <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 12</p>`;
   }
 
   // ---------- Calendrier ----------
@@ -1531,7 +1532,11 @@
   window.addEventListener("hashchange", () => { closeSheet(); render(); window.scrollTo(0, 0); });
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; });
   window.addEventListener("appinstalled", () => { state.installPrompt = null; closeSheet(); toast("Tribu est installée"); });
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
 
   let booted = false;
   sb.auth.onAuthStateChange(async (event, session) => {

@@ -16,7 +16,7 @@
   const SHOP_CATS = ["Fruits & légumes", "Frais", "Épicerie", "Bébé", "Hygiène", "Maison", "Autre"];
 
   const state = {
-    session: null, household: null, me: null, members: [],
+    session: null, household: null, me: null, members: [], memberships: [],
     children: [], items: [], shopping: [], photos: [],
     filter: "all", channel: null, photoUrls: {}
   };
@@ -66,6 +66,23 @@
     return m || "Une erreur est survenue. Réessaie.";
   };
 
+  // ---------- Invitation ----------
+  const INVITE_KEY = "tribu_invite", HID_KEY = "tribu_hid";
+  const ls = {
+    get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } },
+    set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} }
+  };
+  // Le code du lien est gardé de côté : il survit à la création de compte et à la confirmation d'email.
+  (() => {
+    const c = new URLSearchParams(location.search).get("code");
+    if (c) { ls.set(INVITE_KEY, c.trim().toUpperCase().slice(0, 6)); history.replaceState(null, "", location.pathname + location.hash); }
+  })();
+  const pendingInvite = () => ls.get(INVITE_KEY);
+  async function invitePreview(code) {
+    const { data } = await sb.rpc("invite_preview", { p_code: code });
+    return (data && data[0]) || null;
+  }
+
   // ---------- Sheet (modal) ----------
   function openSheet(html, onMount) {
     closeSheet();
@@ -88,10 +105,11 @@
   // ---------- Data ----------
   async function loadHousehold() {
     const uid = state.session.user.id;
-    const { data: mem } = await sb.from("members").select("household_id, display_name, role").eq("user_id", uid).limit(1);
+    const { data: mem } = await sb.from("members").select("household_id, display_name, role, households(name)").eq("user_id", uid).order("created_at");
+    state.memberships = mem || [];
     if (!mem || !mem.length) { state.household = null; return; }
-    state.me = mem[0];
-    const hid = mem[0].household_id;
+    state.me = mem.find((m) => m.household_id === ls.get(HID_KEY)) || mem[0];
+    const hid = state.me.household_id;
     const [h, m] = await Promise.all([
       sb.from("households").select("*").eq("id", hid).single(),
       sb.from("members").select("user_id, display_name, role").eq("household_id", hid)
@@ -179,13 +197,16 @@
     `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${label}</a></li>`;
 
   // ---------- Auth ----------
-  function renderAuth(mode = "login") {
+  function renderAuth(mode) {
+    const invite = pendingInvite();
+    mode = mode || (invite ? "signup" : "login");
     const isLogin = mode === "login";
     $app.innerHTML = `
       <div class="hero">
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu</h1>
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
+        <div id="invite-banner"></div>
         <form class="card" id="auth" novalidate>
           <h3>${isLogin ? "Se connecter" : "Créer un compte"}</h3>
           <label for="email">Email</label>
@@ -200,6 +221,10 @@
       </div>`;
     const form = document.getElementById("auth");
     const err = document.getElementById("err");
+    if (invite) invitePreview(invite).then((pv) => {
+      const b = document.getElementById("invite-banner"); if (!b || !pv) return;
+      b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>${isLogin ? "Connecte-toi" : "Crée ton compte"} pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
+    });
     document.getElementById("switch").onclick = () => renderAuth(isLogin ? "signup" : "login");
     const forgot = document.getElementById("forgot");
     if (forgot) forgot.onclick = async () => {
@@ -219,7 +244,7 @@
           const { error } = await sb.auth.signInWithPassword({ email, password });
           if (error) throw error;
         } else {
-          const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+          const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + (invite ? "?code=" + invite : "") } });
           if (error) throw error;
           if (!data.session) {
             form.innerHTML = `<h3>Vérifie ta boîte mail</h3><p class="muted">Un lien de confirmation a été envoyé à ${esc(email)}. Clique dessus, puis reviens te connecter.</p><button class="btn block" type="button" id="back">Se connecter</button>`;
@@ -235,9 +260,6 @@
   // ---------- Onboarding ----------
   function renderOnboarding(mode = "create") {
     const create = mode === "create";
-    const params = new URLSearchParams(location.search);
-    const inviteCode = params.get("code") || "";
-    if (inviteCode && mode === "create" && !renderOnboarding._seen) { renderOnboarding._seen = true; return renderOnboarding("join"); }
     $app.innerHTML = `
       <div class="hero">
         <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
@@ -247,7 +269,7 @@
           <input id="dn" required maxlength="40" autocomplete="given-name" placeholder="Ex : Camille">
           ${create
             ? `<label for="hn">Nom de la tribu</label><input id="hn" required maxlength="60" placeholder="Ex : Famille Martin">`
-            : `<label for="code">Code d'invitation</label><input id="code" required maxlength="6" value="${esc(inviteCode)}" style="text-transform:uppercase;letter-spacing:.15em;font-weight:700" placeholder="ABC123">`}
+            : `<label for="code">Code d'invitation</label><input id="code" required maxlength="6" style="text-transform:uppercase;letter-spacing:.15em;font-weight:700" placeholder="ABC123">`}
           <div id="err" class="error" hidden></div>
           <button class="btn block" style="margin-top:18px" type="submit">${create ? "Créer la tribu" : "Rejoindre la tribu"}</button>
           <button class="link" type="button" id="switch">${create ? "J'ai un code d'invitation" : "Créer une nouvelle tribu"}</button>
@@ -265,8 +287,9 @@
         const rpc = create
           ? sb.rpc("create_household", { p_name: document.getElementById("hn").value.trim(), p_display_name: dn })
           : sb.rpc("join_household", { p_code: document.getElementById("code").value.trim(), p_display_name: dn });
-        const { error } = await rpc;
+        const { data: newHid, error } = await rpc;
         if (error) throw error;
+        ls.set(HID_KEY, newHid);
         history.replaceState(null, "", location.pathname + "#/accueil");
         await loadHousehold();
         render();
@@ -274,6 +297,48 @@
       } catch (ex) { err.hidden = false; err.textContent = errMsg(ex); }
       finally { btn.disabled = false; }
     };
+  }
+
+  function renderJoinInvite(code, pv) {
+    const already = !!state.household;
+    $app.innerHTML = `
+      <div class="hero">
+        <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
+        <h1>${esc(pv.household_name)}</h1>
+        <p class="lead">${esc(pv.inviter || "Un parent")} t'invite à partager l'organisation de la famille : enfants, rendez-vous, album et courses, synchronisés entre vous en temps réel.</p>
+        <form class="card" id="ji">
+          <label for="ji-dn">Ton prénom</label>
+          <input id="ji-dn" required maxlength="40" autocomplete="given-name" value="${esc(state.me ? state.me.display_name : "")}" placeholder="Ex : Camille">
+          ${already ? `<p class="muted small">Tu passeras sur cette tribu. ${esc(state.household.name)} reste accessible depuis l'onglet Tribu.</p>` : ""}
+          <div id="err" class="error" hidden></div>
+          <button class="btn block" style="margin-top:18px" type="submit">Rejoindre ${esc(pv.household_name)}</button>
+          <button class="link" type="button" id="ji-no">Non merci</button>
+        </form>
+      </div>`;
+    document.getElementById("ji-no").onclick = () => { ls.set(INVITE_KEY, null); render(); };
+    document.getElementById("ji").onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err"); err.hidden = true;
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      const { data: hid, error } = await sb.rpc("join_household", { p_code: code, p_display_name: document.getElementById("ji-dn").value.trim() });
+      if (error) { btn.disabled = false; err.hidden = false; err.textContent = errMsg(error); return; }
+      ls.set(INVITE_KEY, null); ls.set(HID_KEY, hid);
+      history.replaceState(null, "", location.pathname + "#/accueil");
+      await loadHousehold(); render();
+      toast("Bienvenue dans " + pv.household_name);
+    };
+  }
+
+  async function afterLogin() {
+    await loadHousehold();
+    const code = pendingInvite();
+    if (code) {
+      const pv = await invitePreview(code);
+      if (!pv) { ls.set(INVITE_KEY, null); toast("Ce lien d'invitation n'est plus valide."); }
+      else if (state.household && state.household.invite_code === code) ls.set(INVITE_KEY, null);
+      else return renderJoinInvite(code, pv);
+    }
+    render();
   }
 
   // ---------- Views ----------
@@ -422,10 +487,11 @@
     const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
     return `<header class="top"><h1>Tribu</h1></header>
       <div class="card">
-        <h3>Inviter un membre</h3>
-        <p class="muted small">Partage ce code avec l'autre parent ou un proche pour qu'il rejoigne ${esc(state.household.name)}.</p>
+        <h3>Inviter l'autre parent</h3>
+        <p class="muted small">Envoie-lui ce lien : il crée son compte et rejoint directement ${esc(state.household.name)}. Vous verrez tous les deux les mêmes enfants, rendez-vous, photos et courses, en temps réel.</p>
+        <button class="btn block" id="share" data-link="${esc(link)}">Envoyer le lien d'invitation</button>
+        <p class="muted small" style="margin:14px 0 0">Ou donne-lui ce code, à saisir dans l'app :</p>
         <div class="code">${esc(state.household.invite_code)}</div>
-        <button class="btn block" id="share" data-link="${esc(link)}">Partager l'invitation</button>
       </div>
       <h2>Calendrier</h2>
       <div class="card">
@@ -434,8 +500,9 @@
         ${state.me && state.me.role === "owner" ? `<button class="link small" id="cal-reset">Désactiver les anciens liens et en créer de nouveaux</button>` : ""}
       </div>
       <h2>Membres</h2>
-      <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
+      <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}${m.user_id === state.session.user.id ? " (toi)" : ""}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
       ${!standalone ? `<div class="install"><strong>Installer Tribu sur ton téléphone</strong><p class="muted small" style="margin:4px 0 0">${isIOS ? "Dans Safari, appuie sur Partager puis Sur l'écran d'accueil." : "Dans le menu du navigateur, choisis Installer l'application."}</p>${state.installPrompt ? `<button class="btn" style="margin-top:10px" id="install">Installer</button>` : ""}</div>` : ""}
+      ${state.memberships.length > 1 ? `<h2>Mes tribus</h2><div class="card">${state.memberships.map((m) => `<div class="member"><span>${esc(m.households ? m.households.name : "Tribu")}</span>${m.household_id === state.household.id ? `<span class="muted small">Actuelle</span>` : `<button class="link small" style="padding:0" data-switch="${m.household_id}">Ouvrir</button>`}</div>`).join("")}</div>` : ""}
       <h2>Compte</h2>
       <p class="muted small">${esc(state.session.user.email)}</p>
       <button class="btn ghost block" id="logout">Se déconnecter</button>
@@ -743,19 +810,24 @@
     // Settings
     const share = document.getElementById("share");
     if (share) share.onclick = async () => {
-      const text = `Rejoins notre tribu sur Tribu avec le code ${state.household.invite_code} : ${share.dataset.link}`;
-      if (navigator.share) { try { await navigator.share({ title: "Rejoins notre tribu", text }); } catch (_) {} }
-      else { await navigator.clipboard.writeText(text); toast("Invitation copiée"); }
+      const text = `Rejoins ${state.household.name} sur Tribu pour qu'on organise la famille ensemble (enfants, rendez-vous, courses) :`;
+      if (navigator.share) { try { await navigator.share({ title: "Rejoins notre tribu", text, url: share.dataset.link }); } catch (_) {} }
+      else { await navigator.clipboard.writeText(text + " " + share.dataset.link); toast("Lien d'invitation copié"); }
     };
     const inst = document.getElementById("install");
     if (inst) inst.onclick = async () => { state.installPrompt.prompt(); state.installPrompt = null; render(); };
     const lo = document.getElementById("logout"); if (lo) lo.onclick = () => sb.auth.signOut();
+    $app.querySelectorAll("[data-switch]").forEach((b) => b.onclick = async () => {
+      ls.set(HID_KEY, b.dataset.switch); state.filter = "all";
+      await loadHousehold(); location.hash = "#/accueil"; render(); toast("Tribu " + state.household.name);
+    });
     const lv = document.getElementById("leave");
     if (lv) lv.onclick = async () => {
       if (!confirm("Quitter cette tribu ? Tu n'auras plus accès à ses données.")) return;
       await sb.from("members").delete().eq("household_id", state.household.id).eq("user_id", state.session.user.id);
-      if (state.channel) sb.removeChannel(state.channel);
-      state.household = null; render();
+      if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+      ls.set(HID_KEY, null); state.filter = "all";
+      await loadHousehold(); location.hash = "#/accueil"; render();
     };
   }
 
@@ -774,13 +846,13 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], members: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], members: [], memberships: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {
       booted = true;
       $app.innerHTML = `<div class="hero"><p class="muted">Chargement de ta tribu...</p></div>`;
-      setTimeout(async () => { await loadHousehold(); render(); }, 0);
+      setTimeout(afterLogin, 0);
     }
   });
 })();

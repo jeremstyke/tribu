@@ -17,7 +17,7 @@
 
   const state = {
     session: null, household: null, me: null, members: [],
-    children: [], items: [], shopping: [],
+    children: [], items: [], shopping: [], photos: [],
     filter: "all", channel: null, photoUrls: {}
   };
 
@@ -61,6 +61,7 @@
     if (/Email not confirmed/i.test(m)) return "Confirme ton email avec le lien reçu, puis connecte-toi.";
     if (/already registered/i.test(m)) return "Un compte existe déjà avec cet email. Connecte-toi.";
     if (/Password should be/i.test(m)) return "Le mot de passe doit faire au moins 6 caractères.";
+    if (/quota photos/i.test(m)) return "L'album de ta tribu est plein (100 photos). Supprime des photos pour en ajouter.";
     if (/code invalide/i.test(m)) return "Ce code ne correspond à aucune tribu. Vérifie-le.";
     return m || "Une erreur est survenue. Réessaie.";
   };
@@ -103,19 +104,21 @@
 
   async function loadAll() {
     const hid = state.household.id;
-    const [c, i, s] = await Promise.all([
+    const [c, i, s, ph] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
-      sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at")
+      sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
+      sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false })
     ]);
     state.children = c.data || [];
     state.items = i.data || [];
     state.shopping = s.data || [];
+    state.photos = ph.data || [];
     await loadPhotoUrls();
   }
 
   async function loadPhotoUrls() {
-    const missing = state.children.map((c) => c.photo_path).filter((p) => p && !state.photoUrls[p]);
+    const missing = [...state.children.map((c) => c.photo_path), ...state.photos.map((p) => p.path)].filter((p) => p && !state.photoUrls[p]);
     if (!missing.length) return;
     const { data } = await sb.storage.from("child-photos").createSignedUrls(missing, 60 * 60 * 24);
     (data || []).forEach((d) => { if (d.signedUrl) state.photoUrls[d.path] = d.signedUrl; });
@@ -125,9 +128,9 @@
     : esc(c.emoji);
 
   // Redimensionne la photo côté téléphone avant envoi (600 px, JPEG) : rapide et léger.
-  async function resizePhoto(file) {
+  async function resizePhoto(file, max = 600) {
     const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const max = 600, r = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const r = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const w = Math.round(bmp.width * r), h = Math.round(bmp.height * r);
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
     cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
@@ -140,7 +143,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -370,6 +373,15 @@
         <div><h1>${esc(c.first_name)}</h1><div class="muted">${[age(c.birth_date), c.birth_date ? "né(e) le " + new Date(c.birth_date).toLocaleDateString("fr-FR") : ""].filter(Boolean).join(" · ")}</div></div></div>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="edit-child" data-id="${c.id}">Modifier</button><button class="btn" id="add-for-child" data-id="${c.id}">Ajouter</button></div>
       <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>`;
+    const album = state.photos.filter((p) => p.child_id === id);
+    html += `<h2>📸 Album</h2>
+      <div class="album">
+        <button class="album-add" data-album-add="${c.id}" aria-label="Ajouter une photo à l'album"><span>+</span>Photo</button>
+        ${album.map((p) => `<button class="album-cell" data-photo="${p.id}" aria-label="Voir la photo du ${new Date(p.taken_on).toLocaleDateString("fr-FR")}">
+          ${state.photoUrls[p.path] ? `<img src="${esc(state.photoUrls[p.path])}" alt="" loading="lazy">` : ""}
+          ${p.note ? `<span class="album-note">${esc(p.note)}</span>` : ""}</button>`).join("")}
+      </div>
+      ${album.length ? "" : `<p class="muted small">Ajoute des photos avec une petite note pour garder ses souvenirs : premiers pas, anniversaires, sorties...</p>`}`;
     Object.entries(TYPES).forEach(([type, t]) => {
       let list = items.filter((i) => i.type === type);
       if (type === "rdv" || type === "tache") list = list.sort((a, b) => (a.done - b.done) || ((a.due_at || "9") > (b.due_at || "9") ? 1 : -1));
@@ -447,6 +459,73 @@
     });
   }
 
+  // ---------- Album ----------
+  function photoForm(childId, photo) {
+    const child = childById(childId || photo.child_id);
+    let blob = null;
+    const today = new Date().toISOString().slice(0, 10);
+    openSheet(`
+      <h2 style="margin-top:0">${photo ? "Photo de " : "Album de "}${esc(child.first_name)}</h2>
+      <form id="pf">
+        <div class="pf-preview" id="pf-preview">${photo && state.photoUrls[photo.path]
+          ? `<img src="${esc(state.photoUrls[photo.path])}" alt="">`
+          : `<label for="pf-file" class="pf-pick"><span>📷</span>Choisir une photo</label>`}</div>
+        <input id="pf-file" type="file" accept="image/*" hidden>
+        <label for="pf-note">Note</label>
+        <textarea id="pf-note" maxlength="1000" placeholder="Ex : Ses premiers pas dans le salon !">${esc(photo ? photo.note || "" : "")}</textarea>
+        <label for="pf-date">Date</label>
+        <input id="pf-date" type="date" max="${today}" value="${photo ? photo.taken_on : today}">
+        <div class="actions">
+          ${photo ? `<button type="button" class="btn danger" id="pf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="pf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">${photo ? "Enregistrer" : "Ajouter à l'album"}</button>
+        </div>
+      </form>`, (el) => {
+      const file = el.querySelector("#pf-file");
+      file.onchange = async (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        try {
+          blob = await resizePhoto(f, 1600);
+          el.querySelector("#pf-preview").innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`;
+          if (f.lastModified) {
+            const d = new Date(f.lastModified).toISOString().slice(0, 10);
+            if (d <= today) el.querySelector("#pf-date").value = d;
+          }
+        } catch (_) { toast("Format de photo non pris en charge. Essaie une autre image."); }
+      };
+      const cancel = el.querySelector("#pf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#pf-del");
+      if (del) del.onclick = async () => {
+        if (!confirm("Supprimer cette photo de l'album ?")) return;
+        await sb.from("photos").delete().eq("id", photo.id);
+        await sb.storage.from("child-photos").remove([photo.path]);
+        closeSheet(); await loadAll(); render(); toast("Photo supprimée");
+      };
+      el.querySelector("#pf").onsubmit = async (e) => {
+        e.preventDefault();
+        const note = el.querySelector("#pf-note").value.trim() || null;
+        const taken_on = el.querySelector("#pf-date").value || today;
+        const btn = el.querySelector("#pf button[type=submit]");
+        if (photo) {
+          const { error } = await sb.from("photos").update({ note, taken_on }).eq("id", photo.id);
+          if (error) return toast(errMsg(error));
+          closeSheet(); await loadAll(); render(); return toast("Modifications enregistrées");
+        }
+        if (!blob) return toast("Choisis d'abord une photo");
+        btn.disabled = true; btn.textContent = "Envoi...";
+        const path = `${state.household.id}/${child.id}/album/${Date.now()}.jpg`;
+        const up = await sb.storage.from("child-photos").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) { btn.disabled = false; btn.textContent = "Ajouter à l'album"; return toast("La photo n'a pas pu être envoyée. Réessaie."); }
+        const { error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: child.id, path, note, taken_on, created_by: state.session.user.id });
+        if (error) {
+          await sb.storage.from("child-photos").remove([path]);
+          btn.disabled = false; btn.textContent = "Ajouter à l'album";
+          return toast(errMsg(error));
+        }
+        closeSheet(); await loadAll(); render(); toast("Photo ajoutée à l'album");
+      };
+    });
+  }
+
   // ---------- Forms ----------
   function childForm(child) {
     const c = child || { first_name: "", birth_date: "", color: COLORS[state.children.length % COLORS.length], emoji: EMOJIS[state.children.length % EMOJIS.length] };
@@ -500,8 +579,9 @@
       const cancel = el.querySelector("#cf-cancel"); if (cancel) cancel.onclick = closeSheet;
       const del = el.querySelector("#cf-del");
       if (del) del.onclick = async () => {
-        if (!confirm(`Supprimer ${child.first_name} et tous ses éléments ?`)) return;
-        if (child.photo_path) await sb.storage.from("child-photos").remove([child.photo_path]);
+        if (!confirm(`Supprimer ${child.first_name}, tous ses éléments et son album ?`)) return;
+        const files = [child.photo_path, ...state.photos.filter((p) => p.child_id === child.id).map((p) => p.path)].filter(Boolean);
+        if (files.length) await sb.storage.from("child-photos").remove(files);
         await sb.from("children").delete().eq("id", child.id);
         closeSheet(); await loadAll(); location.hash = "#/enfants"; render(); toast("Enfant supprimé");
       };
@@ -618,6 +698,8 @@
       await sb.from("items").update({ done: it.done }).eq("id", it.id);
     });
     const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-album-add]").forEach((b) => b.onclick = () => photoForm(b.dataset.albumAdd));
+    $app.querySelectorAll("[data-photo]").forEach((b) => b.onclick = () => photoForm(null, state.photos.find((p) => p.id === b.dataset.photo)));
     $app.querySelectorAll("[data-cal]").forEach((b) => b.onclick = () => calSheet(b.dataset.cal));
     const cr = document.getElementById("cal-reset");
     if (cr) cr.onclick = async () => {
@@ -692,7 +774,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], members: [] });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], members: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

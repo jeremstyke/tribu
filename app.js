@@ -16,7 +16,7 @@
   const SHOP_CATS = ["Fruits & légumes", "Frais", "Épicerie", "Bébé", "Hygiène", "Maison", "Autre"];
 
   const state = {
-    session: null, household: null, me: null, members: [], memberships: [],
+    session: null, household: null, me: null, members: [], memberships: [], passkeys: [],
     children: [], items: [], shopping: [], photos: [], logs: [],
     filter: "all", channel: null, photoUrls: {}
   };
@@ -107,6 +107,7 @@
     const uid = state.session.user.id;
     const { data: mem } = await sb.from("members").select("household_id, display_name, role, households(name)").eq("user_id", uid).order("created_at");
     state.memberships = mem || [];
+    loadPasskeys().then(() => { if (state.household && route()[0] === "reglages") render(); });
     if (!mem || !mem.length) { state.household = null; return; }
     state.me = mem.find((m) => m.household_id === ls.get(HID_KEY)) || mem[0];
     const hid = state.me.household_id;
@@ -199,103 +200,165 @@
   const navLink = (key, ico, label, active) =>
     `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${label}</a></li>`;
 
-  // ---------- Auth ----------
+  // ---------- Auth (Face ID / empreinte, ou mot de passe) ----------
+  const PK = window.SimpleWebAuthnBrowser;
+  const pkSupported = () => !!(window.PublicKeyCredential && PK && PK.browserSupportsWebAuthn());
+  const bioLabel = () => { const e = detectEnv(); return e.ios ? "Face ID" : e.android ? "l'empreinte" : "une clé d'accès"; };
+  const deviceName = () => { const e = detectEnv(); return e.ios ? "iPhone / iPad" : e.android ? "Android" : "Ordinateur"; };
+
+  async function pkCall(body) {
+    const { data, error } = await sb.functions.invoke("passkey", { body: { ...body, device: deviceName() } });
+    if (error) {
+      let j = {};
+      try { j = await error.context.json(); } catch (_) {}
+      throw new Error(j.error || "server");
+    }
+    return data;
+  }
+  async function finishLogin(token_hash) {
+    let r = await sb.auth.verifyOtp({ token_hash, type: "magiclink" });
+    if (r.error) r = await sb.auth.verifyOtp({ token_hash, type: "email" });
+    if (r.error) throw r.error;
+  }
+  async function passkeyLogin() {
+    const o = await pkCall({ action: "login-options" });
+    const response = await PK.startAuthentication({ optionsJSON: o.options });
+    const r = await pkCall({ action: "login-verify", challengeId: o.challengeId, response });
+    await finishLogin(r.token_hash);
+  }
+  async function passkeySignup(email) {
+    const o = await pkCall({ action: "register-options", email });
+    const response = await PK.startRegistration({ optionsJSON: o.options });
+    const r = await pkCall({ action: "register-verify", challengeId: o.challengeId, response });
+    await finishLogin(r.token_hash);
+  }
+  async function passkeyAdd() {
+    const o = await pkCall({ action: "register-options", mode: "add" });
+    const response = await PK.startRegistration({ optionsJSON: o.options });
+    await pkCall({ action: "register-verify", challengeId: o.challengeId, response });
+    await loadPasskeys();
+  }
+  async function loadPasskeys() {
+    const { data } = await sb.from("passkey_credentials").select("id, device, created_at, last_used_at").order("created_at");
+    state.passkeys = data || [];
+  }
+  function pkError(e) {
+    const n = (e && (e.name || "")) + " " + ((e && e.message) || "");
+    if (/NotAllowedError|AbortError|cancel/i.test(n)) return "Opération annulée. Réessaie quand tu veux.";
+    if (/InvalidStateError|excluded|previously registered/i.test(n)) return "Cet appareil est déjà enregistré pour ce compte.";
+    if (/exists/.test(n)) return "Un compte existe déjà avec cet email. Connecte-toi avec " + bioLabel() + " ou ton mot de passe.";
+    if (/unknown_passkey/.test(n)) return "Cette clé n'est plus reconnue. Connecte-toi avec ton mot de passe, puis réactive " + bioLabel() + " dans l'onglet Tribu.";
+    if (/expired/.test(n)) return "Le délai a expiré. Réessaie.";
+    if (/invalid_email/.test(n)) return "Cette adresse email n'est pas valide.";
+    if (/weak_password/.test(n)) return "Le mot de passe doit faire au moins 6 caractères.";
+    if (/NotSupportedError|SecurityError/i.test(n)) return "Ce navigateur ne permet pas " + bioLabel() + ". Ouvre Tribu dans Safari ou Chrome, ou utilise un mot de passe.";
+    return errMsg(e);
+  }
+
   function renderAuth(mode) {
     const invite = pendingInvite();
-    mode = mode || (invite ? "signup" : "login");
-    const isLogin = mode === "login";
+    const pk = pkSupported();
+    mode = mode || (invite ? "signup" : "home");
+    if (!pk && mode === "home") mode = "login-pwd";
+    if (!pk && mode === "signup") mode = "signup-pwd";
+    const bio = bioLabel();
+
+    let card = "";
+    if (mode === "home") card = `
+      <div class="card">
+        <button class="btn block" id="pk-login">Se connecter avec ${bio}</button>
+        <button class="btn ghost block" style="margin-top:10px" id="go-signup">Créer un compte</button>
+        <button class="link small" id="go-pwd">Se connecter avec un mot de passe</button>
+        <div id="err" class="error" hidden></div>
+      </div>`;
+    if (mode === "signup") card = `
+      <form class="card" id="f-signup" novalidate>
+        <h3>Créer un compte</h3>
+        <p class="muted small" style="margin:4px 0 0">Pas de mot de passe à retenir : tu te connecteras avec ${bio}.</p>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" required>
+        <div id="err" class="error" hidden></div>
+        <button class="btn block" style="margin-top:18px" type="submit">Créer mon compte avec ${bio}</button>
+        <button class="link small" type="button" id="go-signup-pwd">Créer un compte avec un mot de passe</button>
+        <button class="link small" type="button" id="go-home">J'ai déjà un compte</button>
+      </form>`;
+    if (mode === "signup-pwd" || mode === "login-pwd") {
+      const isLogin = mode === "login-pwd";
+      card = `
+      <form class="card" id="f-pwd" novalidate>
+        <h3>${isLogin ? "Se connecter" : "Créer un compte"}</h3>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="${isLogin ? "username" : "email"}" required>
+        <label for="pwd">Mot de passe</label>
+        <input id="pwd" type="password" autocomplete="${isLogin ? "current-password" : "new-password"}" minlength="6" required>
+        <div id="err" class="error" hidden></div>
+        <button class="btn block" style="margin-top:18px" type="submit">${isLogin ? "Se connecter" : "Créer mon compte"}</button>
+        ${isLogin ? `<button class="link small" type="button" id="forgot">Mot de passe oublié</button>` : ""}
+        <button class="link small" type="button" id="${isLogin ? "go-signup" : "go-home"}">${isLogin ? "Pas encore de compte ? Créer un compte" : "J'ai déjà un compte"}</button>
+        ${pk ? `<button class="link small" type="button" id="go-home2">Utiliser ${bio}</button>` : ""}
+      </form>`;
+    }
+
     $app.innerHTML = `
       <div class="hero">
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu</h1>
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
         <div id="invite-banner"></div>
-        <form class="card" id="auth" novalidate>
-          <h3>${isLogin ? "Se connecter" : "Créer un compte"}</h3>
-          <label for="email">Email</label>
-          <input id="email" type="email" autocomplete="email" required>
-          <label for="pwd">Mot de passe</label>
-          <input id="pwd" type="password" autocomplete="${isLogin ? "current-password" : "new-password"}" minlength="6" required>
-          <div id="err" class="error" hidden></div>
-          <button class="btn block" style="margin-top:18px" type="submit">${isLogin ? "Se connecter" : "Créer mon compte"}</button>
-          <button class="link" type="button" id="switch">${isLogin ? "Pas encore de compte ? Créer un compte" : "Déjà un compte ? Se connecter"}</button>
-          ${isLogin ? `<button class="link small" type="button" id="forgot">Mot de passe oublié</button>` : ""}
-        </form>
+        ${card}
         ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:14px">📲 Comment installer Tribu sur mon téléphone</button>` : ""}
       </div>`;
-    const form = document.getElementById("auth");
+
     const err = document.getElementById("err");
+    const showErr = (m) => { err.hidden = false; err.textContent = m; };
+    const go = (id, m) => { const b = document.getElementById(id); if (b) b.onclick = () => renderAuth(m); };
+    go("go-signup", "signup"); go("go-pwd", "login-pwd"); go("go-signup-pwd", "signup-pwd"); go("go-home", pk ? "home" : "login-pwd"); go("go-home2", "home");
+    $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
     if (invite) invitePreview(invite).then((pv) => {
       const b = document.getElementById("invite-banner"); if (!b || !pv) return;
-      b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>${isLogin ? "Connecte-toi" : "Crée ton compte"} pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
+      b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>Crée ton compte (ou connecte-toi) pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
     });
-    document.getElementById("switch").onclick = () => renderAuth(isLogin ? "signup" : "login");
-    $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
-    const forgot = document.getElementById("forgot");
-    if (forgot) forgot.onclick = async () => {
-      const email = document.getElementById("email").value.trim();
-      if (!email) { err.hidden = false; err.textContent = "Saisis ton email puis appuie à nouveau sur Mot de passe oublié."; return; }
-      await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
-      toast("Email de réinitialisation envoyé");
+
+    const busy = (btn, on, label) => { btn.disabled = on; if (label) btn.textContent = label; };
+
+    const pkl = document.getElementById("pk-login");
+    if (pkl) pkl.onclick = async () => {
+      err.hidden = true; busy(pkl, true);
+      try { await passkeyLogin(); } catch (e) { showErr(pkError(e)); } finally { busy(pkl, false); }
     };
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      err.hidden = true;
+
+    const fs = document.getElementById("f-signup");
+    if (fs) fs.onsubmit = async (e) => {
+      e.preventDefault(); err.hidden = true;
       const email = document.getElementById("email").value.trim();
-      const password = document.getElementById("pwd").value;
-      const btn = form.querySelector("button[type=submit]"); btn.disabled = true;
-      try {
-        if (isLogin) {
+      if (!email) return showErr("Saisis ton email.");
+      const btn = fs.querySelector("button[type=submit]"); busy(btn, true);
+      try { await passkeySignup(email); } catch (ex) { showErr(pkError(ex)); } finally { busy(btn, false); }
+    };
+
+    const fp = document.getElementById("f-pwd");
+    if (fp) {
+      const isLogin = mode === "login-pwd";
+      const forgot = document.getElementById("forgot");
+      if (forgot) forgot.onclick = async () => {
+        const email = document.getElementById("email").value.trim();
+        if (!email) return showErr("Saisis ton email puis appuie à nouveau sur Mot de passe oublié.");
+        await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+        toast("Si un compte existe, un email a été envoyé");
+      };
+      fp.onsubmit = async (e) => {
+        e.preventDefault(); err.hidden = true;
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("pwd").value;
+        const btn = fp.querySelector("button[type=submit]"); busy(btn, true);
+        try {
+          if (!isLogin) await pkCall({ action: "signup-password", email, password });
           const { error } = await sb.auth.signInWithPassword({ email, password });
           if (error) throw error;
-        } else {
-          const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + (invite ? "?code=" + invite : "") } });
-          if (error) throw error;
-          if (!data.session) {
-            waitForConfirmation(form, email, password);
-          }
-        }
-      } catch (ex) {
-        err.hidden = false; err.textContent = errMsg(ex);
-      } finally { btn.disabled = false; }
-    };
-  }
-
-  // Après l'inscription : la connexion se fait toute seule dès que l'email est confirmé,
-  // sans dépendre de la page vers laquelle le lien du mail redirige.
-  function waitForConfirmation(form, email, password) {
-    form.innerHTML = `<h3>Confirme ton email</h3>
-      <ol class="steps">
-        <li><span>Ouvre le mail envoyé à <strong>${esc(email)}</strong> et appuie sur le lien de confirmation.</span></li>
-        <li><span>Si le lien ouvre une page d'erreur, ce n'est pas grave : ton compte est bien confirmé. Ferme-la.</span></li>
-        <li><span>Reviens ici : la connexion se fait automatiquement.</span></li>
-      </ol>
-      <p class="muted small" id="wait-status">En attente de la confirmation...</p>
-      <button class="btn block" type="button" id="wait-retry">J'ai confirmé, me connecter</button>
-      <button class="link small" type="button" id="wait-resend">Renvoyer le mail</button>
-      <button class="link small muted" type="button" id="wait-back">Utiliser une autre adresse</button>`;
-    let done = false, timer;
-    const stop = () => { done = true; clearInterval(timer); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", attempt); };
-    async function attempt(manual) {
-      if (done) return;
-      const { data, error } = await sb.auth.signInWithPassword({ email, password });
-      if (data && data.session) return stop();
-      if (manual === true) {
-        const st = document.getElementById("wait-status");
-        if (st) st.textContent = error && /not confirmed/i.test(error.message) ? "Pas encore confirmé. Appuie sur le lien du mail, puis réessaie." : errMsg(error);
-      }
+        } catch (ex) { showErr(isLogin ? errMsg(ex) : pkError(ex)); }
+        finally { busy(btn, false); }
+      };
     }
-    const onVis = () => { if (document.visibilityState === "visible") attempt(); };
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("focus", attempt);
-    timer = setInterval(attempt, 5000);
-    setTimeout(stop, 30 * 60 * 1000);
-    document.getElementById("wait-retry").onclick = () => attempt(true);
-    document.getElementById("wait-resend").onclick = async () => {
-      const { error } = await sb.auth.resend({ type: "signup", email });
-      toast(error ? errMsg(error) : "Mail renvoyé");
-    };
-    document.getElementById("wait-back").onclick = () => { stop(); renderAuth("signup"); };
   }
 
   // ---------- Onboarding ----------
@@ -437,6 +500,12 @@
         <div class="ib-text"><strong>Installe Tribu</strong><br><span class="small">Elle s'ouvrira comme une vraie app depuis ton écran d'accueil.</span></div>
         <button class="btn" data-install-help>Voir comment</button>
         <button class="ib-close" id="install-dismiss" aria-label="Masquer">×</button>
+      </div>` : ""}
+      ${(isStandalone() || ls.get("tribu_install_hidden")) && pkSupported() && !state.passkeys.length && !ls.get("tribu_pk_hidden") ? `<div class="install-banner">
+        <span class="ib-ico" aria-hidden="true">🔐</span>
+        <div class="ib-text"><strong>Connexion avec ${bioLabel()}</strong><br><span class="small">Plus besoin de mot de passe sur ce téléphone.</span></div>
+        <button class="btn" id="pk-add">Activer</button>
+        <button class="ib-close" id="pk-dismiss" aria-label="Masquer">×</button>
       </div>` : ""}`;
 
     state.children.filter((c) => (state.filter === "all" || state.filter === c.id) && ["bebe", "petit"].includes(ageBand(c))).forEach((c) => {
@@ -562,6 +631,12 @@
       <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}${m.user_id === state.session.user.id ? " (toi)" : ""}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
       ${!isStandalone() ? `<h2>Application</h2><div class="card"><p class="muted small" style="margin-top:0">Installe Tribu sur ton écran d'accueil : elle s'ouvre comme une vraie application, en plein écran, sans passer par le navigateur.</p><button class="btn block" data-install-help>📲 Installer Tribu sur mon téléphone</button></div>` : ""}
       ${state.memberships.length > 1 ? `<h2>Mes tribus</h2><div class="card">${state.memberships.map((m) => `<div class="member"><span>${esc(m.households ? m.households.name : "Tribu")}</span>${m.household_id === state.household.id ? `<span class="muted small">Actuelle</span>` : `<button class="link small" style="padding:0" data-switch="${m.household_id}">Ouvrir</button>`}</div>`).join("")}</div>` : ""}
+      ${pkSupported() ? `<h2>Connexion avec ${bioLabel()}</h2>
+      <div class="card">
+        ${state.passkeys.length ? state.passkeys.map((k) => `<div class="member"><span>🔐 ${esc(k.device || "Appareil")}<br><span class="muted small">Ajoutée le ${new Date(k.created_at).toLocaleDateString("fr-FR")}${k.last_used_at ? ", utilisée " + ago(k.last_used_at) : ""}</span></span><button class="link small" style="padding:0" data-pk-del="${esc(k.id)}">Retirer</button></div>`).join("")
+          : `<p class="muted small" style="margin-top:0">Connecte-toi d'un regard ou d'un doigt, sans mot de passe à retenir.</p>`}
+        <button class="btn ${state.passkeys.length ? "ghost " : ""}block" style="margin-top:10px" id="pk-add">${state.passkeys.length ? "Ajouter cet appareil" : "Activer " + bioLabel()}</button>
+      </div>` : ""}
       <h2>Compte</h2>
       <p class="muted small">${esc(state.session.user.email)}</p>
       <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
@@ -1124,8 +1199,21 @@
     const inst = document.getElementById("install");
     if (inst) inst.onclick = async () => { state.installPrompt.prompt(); state.installPrompt = null; render(); };
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
+    const pkd = document.getElementById("pk-dismiss");
+    if (pkd) pkd.onclick = () => { ls.set("tribu_pk_hidden", "1"); render(); };
     const ib = document.getElementById("install-dismiss");
     if (ib) ib.onclick = () => { ls.set("tribu_install_hidden", "1"); render(); };
+    const pka = document.getElementById("pk-add");
+    if (pka) pka.onclick = async () => {
+      pka.disabled = true;
+      try { await passkeyAdd(); render(); toast(bioLabel().replace(/^l'/, "L'").replace(/^une/, "Une") + " activé" + (bioLabel() === "Face ID" ? "" : "e")); }
+      catch (e) { toast(pkError(e)); pka.disabled = false; }
+    };
+    $app.querySelectorAll("[data-pk-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm("Retirer cet appareil ? Tu ne pourras plus t'y connecter sans mot de passe.")) return;
+      await sb.from("passkey_credentials").delete().eq("id", b.dataset.pkDel);
+      await loadPasskeys(); render(); toast("Appareil retiré");
+    });
     const cpw = document.getElementById("change-pwd");
     if (cpw) cpw.onclick = () => openSheet(`
       <h2 style="margin-top:0">Nouveau mot de passe</h2>
@@ -1179,7 +1267,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], members: [], memberships: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

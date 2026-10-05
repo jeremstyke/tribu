@@ -17,7 +17,7 @@
 
   const state = {
     session: null, household: null, me: null, members: [], memberships: [],
-    children: [], items: [], shopping: [], photos: [],
+    children: [], items: [], shopping: [], photos: [], logs: [],
     filter: "all", channel: null, photoUrls: {}
   };
 
@@ -122,16 +122,19 @@
 
   async function loadAll() {
     const hid = state.household.id;
-    const [c, i, s, ph] = await Promise.all([
+    const since = new Date(Date.now() - 4 * 86400000).toISOString();
+    const [c, i, s, ph, lg] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
-      sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false })
+      sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false }),
+      sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000)
     ]);
     state.children = c.data || [];
     state.items = i.data || [];
     state.shopping = s.data || [];
     state.photos = ph.data || [];
+    state.logs = lg.data || [];
     await loadPhotoUrls();
   }
 
@@ -161,7 +164,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -400,6 +403,13 @@
         <button class="ib-close" id="install-dismiss" aria-label="Masquer">×</button>
       </div>` : ""}`;
 
+    state.children.filter((c) => (state.filter === "all" || state.filter === c.id) && ["bebe", "petit"].includes(ageBand(c))).forEach((c) => {
+      html += `<section class="baby-card" style="--c:${esc(c.color)}">
+        <div class="bc-head"><div class="bubble" aria-hidden="true">${avatar(c)}</div><a href="#/enfant/${c.id}" class="bc-name">${esc(c.first_name)}</a><button class="btn" data-log-pick="${c.id}">+ Noter</button></div>
+        ${statsHtml(babyStats(c)) || `<p class="muted small" style="margin:8px 0 0">Note biberons, couches et dodos d'un geste avec + Noter.</p>`}
+      </section>`;
+    });
+
     if (!state.children.length) {
       html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
     }
@@ -444,9 +454,15 @@
     let html = `
       <button class="back" onclick="history.length > 1 ? history.back() : (location.hash='#/enfants')">‹ Enfants</button>
       <div class="child-head"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
-        <div><h1>${esc(c.first_name)}</h1><div class="muted">${[age(c.birth_date), c.birth_date ? "né(e) le " + new Date(c.birth_date).toLocaleDateString("fr-FR") : ""].filter(Boolean).join(" · ")}</div></div></div>
+        <div><h1>${esc(c.first_name)}</h1><div class="muted">${BAND_LABEL[ageBand(c)]} · ${age(c.birth_date) || "nouveau-né"}</div></div></div>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="edit-child" data-id="${c.id}">Modifier</button><button class="btn" id="add-for-child" data-id="${c.id}">Ajouter</button></div>
       <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>`;
+    const band = ageBand(c);
+    if (band === "bebe" || band === "petit") {
+      html += `<h2>Noter</h2>${quickGrid(c)}${statsHtml(babyStats(c))}<h2>Journal</h2>${journalHtml(c)}`;
+    } else {
+      html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
+    }
     const album = state.photos.filter((p) => p.child_id === id);
     html += `<h2>📸 Album</h2>
       <div class="album">
@@ -595,6 +611,181 @@
     });
   }
 
+  // ---------- Journal (suivi selon l'âge) ----------
+  const ageMonths = (birth) => {
+    const b = new Date(birth), n = new Date();
+    let m = (n.getFullYear() - b.getFullYear()) * 12 + (n.getMonth() - b.getMonth());
+    if (n.getDate() < b.getDate()) m--;
+    return Math.max(0, m);
+  };
+  const BAND_LABEL = { bebe: "Bébé", petit: "Tout-petit", enfant: "Enfant", ado: "Ado" };
+  const ageBand = (c) => { const m = ageMonths(c.birth_date); return m < 12 ? "bebe" : m < 36 ? "petit" : m < 144 ? "enfant" : "ado"; };
+  const ALL = ["bebe", "petit", "enfant", "ado"];
+  const KINDS = {
+    biberon:     { label: "Biberon",     ico: "🍼", bands: ["bebe", "petit"] },
+    tetee:       { label: "Tétée",       ico: "🤱", bands: ["bebe", "petit"], maxMonths: 24 },
+    repas:       { label: "Repas",       ico: "🥣", bands: ["bebe", "petit"], minMonths: 4 },
+    couche:      { label: "Couche",      ico: "🧷", bands: ["bebe", "petit"] },
+    pot:         { label: "Pot",         ico: "🚽", bands: ["petit"], minMonths: 18 },
+    dodo:        { label: "Dodo",        ico: "😴", bands: ["bebe", "petit"] },
+    reveil:      { label: "Réveil",      ico: "🌞", bands: ["bebe", "petit"] },
+    medicament:  { label: "Médicament",  ico: "💊", bands: ALL },
+    temperature: { label: "Température", ico: "🌡️", bands: ALL },
+    bain:        { label: "Bain",        ico: "🛁", bands: ["bebe", "petit"] }
+  };
+  const kindsFor = (c) => {
+    const band = ageBand(c), m = ageMonths(c.birth_date);
+    return Object.entries(KINDS).filter(([, k]) => k.bands.includes(band) && (!k.minMonths || m >= k.minMonths) && (!k.maxMonths || m < k.maxMonths)).map(([key]) => key);
+  };
+  const childLogs = (id) => state.logs.filter((l) => l.child_id === id);
+  const ago = (at) => {
+    const min = Math.round((Date.now() - new Date(at)) / 60000);
+    if (min < 1) return "à l'instant";
+    if (min < 60) return `il y a ${min} min`;
+    if (min < 24 * 60) { const h = Math.floor(min / 60), r = min % 60; return `il y a ${h} h${r ? " " + String(r).padStart(2, "0") : ""}`; }
+    return fmtDay(at).toLowerCase() + " à " + fmtTime(at);
+  };
+  const COUCHE = { pipi: "pipi", caca: "caca", both: "pipi + caca" };
+  function logLabel(l) {
+    const d = l.data || {};
+    switch (l.kind) {
+      case "biberon": return `Biberon${d.ml ? " " + d.ml + " ml" : ""}`;
+      case "tetee": return `Tétée${d.side ? " " + d.side : ""}${d.min ? ", " + d.min + " min" : ""}`;
+      case "repas": return `Repas${d.what ? " : " + d.what : ""}${d.qty ? " (" + d.qty + ")" : ""}`;
+      case "couche": return `Couche ${COUCHE[d.type] || ""}`;
+      case "pot": return `Pot : ${COUCHE[d.type] || ""}`;
+      case "medicament": return `${d.name || "Médicament"}${d.dose ? " " + d.dose : ""}`;
+      case "temperature": return `${String(d.t || "").replace(".", ",")} °C`;
+      default: return KINDS[l.kind].label;
+    }
+  }
+
+  function babyStats(c) {
+    const logs = childLogs(c.id);
+    const today = startOfDay(new Date());
+    const tl = logs.filter((l) => new Date(l.at) >= today);
+    const kinds = kindsFor(c);
+    const tiles = [];
+    if (kinds.includes("biberon")) {
+      const b = tl.filter((l) => l.kind === "biberon");
+      const last = logs.find((l) => l.kind === "biberon");
+      const ml = b.reduce((a, l) => a + (Number(l.data.ml) || 0), 0);
+      tiles.push(["🍼", last ? ago(last.at) : "Aucun", `${b.length} biberon${b.length > 1 ? "s" : ""}${ml ? ", " + ml + " ml" : ""} aujourd'hui`]);
+    }
+    if (kinds.includes("tetee")) {
+      const t = tl.filter((l) => l.kind === "tetee"); const last = logs.find((l) => l.kind === "tetee");
+      if (t.length || last) tiles.push(["🤱", last ? ago(last.at) : "Aucune", `${t.length} tétée${t.length > 1 ? "s" : ""} aujourd'hui${last && last.data.side ? ", dernière " + last.data.side : ""}`]);
+    }
+    if (kinds.includes("couche")) {
+      const cc = tl.filter((l) => l.kind === "couche");
+      const pipi = cc.filter((l) => l.data.type !== "caca").length, caca = cc.filter((l) => l.data.type !== "pipi").length;
+      const last = logs.find((l) => l.kind === "couche");
+      tiles.push(["🧷", last ? ago(last.at) : "Aucune", `${cc.length} couche${cc.length > 1 ? "s" : ""} aujourd'hui (${pipi} pipi, ${caca} caca)`]);
+    }
+    const sleep = logs.find((l) => l.kind === "dodo" || l.kind === "reveil");
+    if (kinds.includes("dodo") && sleep) {
+      const min = Math.round((Date.now() - new Date(sleep.at)) / 60000);
+      const dur = min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}`;
+      tiles.push([sleep.kind === "dodo" ? "😴" : "🌞", sleep.kind === "dodo" ? "Dort" : "Éveillé(e)", `depuis ${dur}`]);
+    }
+    const med = logs.find((l) => l.kind === "medicament" && Date.now() - new Date(l.at) < 86400000);
+    if (med) tiles.push(["💊", ago(med.at), logLabel(med)]);
+    const temp = logs.find((l) => l.kind === "temperature" && Date.now() - new Date(l.at) < 86400000);
+    if (temp) tiles.push(["🌡️", logLabel(temp), ago(temp.at), Number(temp.data.t) >= 38]);
+    return tiles;
+  }
+  const statsHtml = (tiles) => tiles.length ? `<div class="stats">${tiles.map(([i, a, b, warn]) =>
+    `<div class="stat ${warn ? "warn" : ""}"><span class="s-ico" aria-hidden="true">${i}</span><div><strong>${esc(a)}</strong><div class="small muted">${esc(b)}</div></div></div>`).join("")}</div>` : "";
+  const quickGrid = (c) => `<div class="quick">${kindsFor(c).map((k) =>
+    `<button class="q-btn" data-log="${k}" data-child="${c.id}"><span aria-hidden="true">${KINDS[k].ico}</span>${KINDS[k].label}</button>`).join("")}</div>`;
+
+  function journalHtml(c, limitDays = 2) {
+    const from = startOfDay(new Date(Date.now() - (limitDays - 1) * 86400000));
+    const logs = childLogs(c.id).filter((l) => new Date(l.at) >= from);
+    if (!logs.length) return `<p class="muted small">Rien de noté pour l'instant. Appuie sur un bouton ci-dessus : l'heure actuelle est remplie automatiquement.</p>`;
+    const groups = {};
+    logs.forEach((l) => { (groups[dayKey(l.at)] ||= []).push(l); });
+    return Object.keys(groups).sort().reverse().map((k) => `<div class="j-day">${fmtDay(k)}</div>${groups[k].map((l) =>
+      `<button class="j-row" data-log-edit="${l.id}"><span class="j-time">${fmtTime(l.at)}</span><span aria-hidden="true">${KINDS[l.kind].ico}</span><span class="j-text">${esc(logLabel(l))}${l.note ? `<span class="muted"> · ${esc(l.note)}</span>` : ""}</span></button>`).join("")}`).join("");
+  }
+
+  function logPicker(c) {
+    openSheet(`<h2 style="margin-top:0">${esc(c.first_name)} : noter</h2>${quickGrid(c)}
+      <button class="btn ghost block" style="margin-top:14px" id="lp-item">📅 Rendez-vous, tâche ou note</button>`, (el) => {
+      el.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => logForm(c, b.dataset.log));
+      el.querySelector("#lp-item").onclick = () => itemForm(null, { child_id: c.id });
+    });
+  }
+
+  function logForm(c, kind, existing) {
+    const d = existing ? existing.data || {} : {};
+    const k = KINDS[kind];
+    const meds = [...new Set(state.logs.filter((l) => l.child_id === c.id && l.kind === "medicament" && l.data.name).map((l) => l.data.name))];
+    const seg = (name, opts, val) => `<div class="seg" data-seg="${name}">${opts.map(([v, lab]) => `<button type="button" data-v="${esc(v)}" aria-pressed="${v === val}">${lab}</button>`).join("")}</div>`;
+    let fields = "";
+    if (kind === "biberon") fields = `<label>Quantité (ml)</label>${seg("mlc", [30, 60, 90, 120, 150, 180, 210, 240].map((n) => [String(n), n]), String(d.ml || ""))}
+      <input id="lf-ml" type="number" inputmode="numeric" min="0" max="500" value="${esc(d.ml || "")}" placeholder="Autre quantité" style="margin-top:8px">`;
+    if (kind === "tetee") fields = `<label>Côté</label>${seg("side", [["gauche", "Gauche"], ["droite", "Droite"], ["des deux côtés", "Les deux"]], d.side || "")}
+      <label for="lf-min">Durée (min)</label><input id="lf-min" type="number" inputmode="numeric" min="0" max="120" value="${esc(d.min || "")}">`;
+    if (kind === "repas") fields = `<label for="lf-what">Au menu</label><input id="lf-what" maxlength="100" value="${esc(d.what || "")}" placeholder="Ex : purée de carottes">
+      <label>Quantité</label>${seg("qty", [["tout mangé", "Tout mangé"], ["la moitié", "La moitié"], ["un peu", "Un peu"]], d.qty || "")}`;
+    if (kind === "couche" || kind === "pot") fields = `<label>${kind === "pot" ? "Résultat" : "Contenu"}</label>
+      <div class="big-choice">${[["pipi", "💧 Pipi"], ["caca", "💩 Caca"], ["both", "💧💩 Les deux"]].map(([v, lab]) => `<button type="button" data-type="${v}" aria-pressed="${d.type === v}">${lab}</button>`).join("")}</div>`;
+    if (kind === "medicament") fields = `<label for="lf-name">Médicament</label><input id="lf-name" list="lf-meds" maxlength="80" required value="${esc(d.name || "")}" placeholder="Ex : Doliprane">
+      <datalist id="lf-meds">${meds.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
+      <label for="lf-dose">Dose donnée</label><input id="lf-dose" maxlength="60" value="${esc(d.dose || "")}" placeholder="Ex : 1 dose-poids, 2,5 ml">`;
+    if (kind === "temperature") fields = `<label for="lf-t">Température (°C)</label><input id="lf-t" type="number" inputmode="decimal" step="0.1" min="34" max="43" required value="${esc(d.t || "")}" placeholder="37,5">
+      <p class="error small" id="lf-fever" hidden>Avant 3 mois, une fièvre à 38 °C ou plus impose d'appeler rapidement le médecin, ou le 15 en cas de doute.</p>`;
+    openSheet(`
+      <h2 style="margin-top:0">${k.ico} ${k.label} · ${esc(c.first_name)}</h2>
+      <form id="lf">
+        ${fields}
+        <label for="lf-at">Heure</label>
+        <input id="lf-at" type="datetime-local" required value="${toLocalInput(existing ? existing.at : new Date().toISOString())}">
+        <label for="lf-note">Note (facultatif)</label>
+        <input id="lf-note" maxlength="500" value="${esc(existing ? existing.note || "" : "")}" placeholder="${kind === "dodo" ? "Ex : dans son lit, s'est endormi seul" : "Ex : a régurgité un peu"}">
+        <div class="actions">
+          ${existing ? `<button type="button" class="btn danger" id="lf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="lf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">Enregistrer</button>
+        </div>
+      </form>`, (el) => {
+      const vals = { side: d.side || "", qty: d.qty || "", type: d.type || "" };
+      el.querySelectorAll("[data-seg]").forEach((w) => w.addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        w.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        if (w.dataset.seg === "mlc") el.querySelector("#lf-ml").value = b.dataset.v; else vals[w.dataset.seg] = b.dataset.v;
+      }));
+      const form = el.querySelector("#lf");
+      el.querySelectorAll("[data-type]").forEach((b) => b.onclick = () => {
+        vals.type = b.dataset.type;
+        el.querySelectorAll("[data-type]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        if (!existing) form.requestSubmit();
+      });
+      const t = el.querySelector("#lf-t");
+      if (t) t.oninput = () => { el.querySelector("#lf-fever").hidden = !(ageMonths(c.birth_date) < 3 && Number(t.value) >= 38); };
+      const cancel = el.querySelector("#lf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#lf-del");
+      if (del) del.onclick = async () => { await sb.from("logs").delete().eq("id", existing.id); closeSheet(); await loadAll(); render(); toast("Supprimé"); };
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const data = {};
+        const v = (id) => { const n = el.querySelector(id); return n ? n.value.trim() : ""; };
+        if (kind === "biberon" && v("#lf-ml")) data.ml = Number(v("#lf-ml"));
+        if (kind === "tetee") { if (vals.side) data.side = vals.side; if (v("#lf-min")) data.min = Number(v("#lf-min")); }
+        if (kind === "repas") { if (v("#lf-what")) data.what = v("#lf-what"); if (vals.qty) data.qty = vals.qty; }
+        if (kind === "couche" || kind === "pot") { if (!vals.type) return toast("Choisis pipi, caca ou les deux"); data.type = vals.type; }
+        if (kind === "medicament") { if (!v("#lf-name")) return; data.name = v("#lf-name"); if (v("#lf-dose")) data.dose = v("#lf-dose"); }
+        if (kind === "temperature") { if (!v("#lf-t")) return; data.t = Number(v("#lf-t").replace(",", ".")); }
+        const row = { kind, data, at: new Date(v("#lf-at")).toISOString(), note: v("#lf-note") || null };
+        const { error } = existing
+          ? await sb.from("logs").update(row).eq("id", existing.id)
+          : await sb.from("logs").insert({ ...row, household_id: state.household.id, child_id: c.id, created_by: state.session.user.id });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(`${k.label} noté${["couche", "tetee", "temperature"].includes(kind) ? "e" : ""}`);
+      };
+    });
+  }
+
   // ---------- Album ----------
   function photoForm(childId, photo) {
     const child = childById(childId || photo.child_id);
@@ -681,7 +872,8 @@
           </div>
         </div>
         <label for="cf-birth">Date de naissance</label>
-        <input id="cf-birth" type="date" value="${esc(c.birth_date || "")}">
+        <input id="cf-birth" type="date" required max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.birth_date || "")}">
+        <p class="muted small" style="margin:6px 0 0">Les options s'adaptent à son âge : biberons, couches et dodos pour un bébé, rendez-vous et activités ensuite.</p>
         <label>Couleur</label>
         <div class="swatches" id="cf-colors">${COLORS.map((x) => `<button type="button" style="--c:${x}" data-v="${x}" aria-label="Couleur ${x}" aria-pressed="${x === color}"></button>`).join("")}</div>
         <label>Avatar</label>
@@ -723,7 +915,8 @@
       };
       el.querySelector("#cf").onsubmit = async (e) => {
         e.preventDefault();
-        const row = { first_name: el.querySelector("#cf-name").value.trim(), birth_date: el.querySelector("#cf-birth").value || null, color, emoji };
+        const row = { first_name: el.querySelector("#cf-name").value.trim(), birth_date: el.querySelector("#cf-birth").value, color, emoji };
+        if (!row.birth_date) return toast("Indique sa date de naissance");
         if (!row.first_name) return;
         const btn = el.querySelector("#cf button[type=submit]"); btn.disabled = true;
         const q = child
@@ -821,8 +1014,16 @@
     if (fab) fab.onclick = () => {
       const [page, id] = route();
       if (!state.children.length && page !== "enfant") { toast("Ajoute d'abord un enfant, ou choisis Toute la famille"); }
+      const ch = page === "enfant" ? childById(id) : null;
+      if (ch && ["bebe", "petit"].includes(ageBand(ch))) return logPicker(ch);
       itemForm(null, page === "enfant" ? { child_id: id } : {});
     };
+    $app.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => logForm(childById(b.dataset.child), b.dataset.log));
+    $app.querySelectorAll("[data-log-pick]").forEach((b) => b.onclick = () => logPicker(childById(b.dataset.logPick)));
+    $app.querySelectorAll("[data-log-edit]").forEach((b) => b.onclick = () => {
+      const l = state.logs.find((x) => x.id === b.dataset.logEdit);
+      logForm(childById(l.child_id), l.kind, l);
+    });
     $app.querySelectorAll("[data-edit]").forEach((n) => {
       const open = () => itemForm(state.items.find((i) => i.id === n.dataset.edit));
       n.onclick = open;
@@ -919,7 +1120,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], members: [], memberships: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], members: [], memberships: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

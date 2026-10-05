@@ -705,7 +705,7 @@
       <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
       <button class="btn ghost block" style="margin-top:10px" id="logout">Se déconnecter</button>
       <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 12</p>`;
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 13</p>`;
   }
 
   // ---------- Calendrier ----------
@@ -1529,7 +1529,15 @@
   }
 
   // ---------- Boot ----------
-  window.addEventListener("hashchange", () => { closeSheet(); render(); window.scrollTo(0, 0); });
+  // L'accueil s'ouvre toujours sur "Tous"
+  window.addEventListener("hashchange", () => { closeSheet(); if (route()[0] === "accueil") state.filter = "all"; render(); window.scrollTo(0, 0); });
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest('.nav a[href="#/accueil"]');
+    if (a && route()[0] === "accueil" && state.filter !== "all") { state.filter = "all"; render(); }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.household && route()[0] === "accueil" && state.filter !== "all") { state.filter = "all"; render(); }
+  });
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; });
   window.addEventListener("appinstalled", () => { state.installPrompt = null; closeSheet(); toast("Tribu est installée"); });
   if ("serviceWorker" in navigator) {

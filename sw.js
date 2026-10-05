@@ -1,5 +1,5 @@
 // Cache de l'interface pour le hors-ligne. Toujours la dernière version quand le réseau est là.
-const CACHE = "tribu-v12";
+const CACHE = "tribu-v13";
 const ASSETS = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {

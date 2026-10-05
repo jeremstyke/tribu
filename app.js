@@ -17,7 +17,7 @@
 
   const state = {
     session: null, household: null, me: null, members: [], memberships: [], passkeys: [],
-    children: [], items: [], shopping: [], photos: [], logs: [],
+    children: [], items: [], shopping: [], photos: [], logs: [], activities: [],
     filter: "all", channel: null, photoUrls: {}
   };
 
@@ -124,18 +124,20 @@
   async function loadAll() {
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
-    const [c, i, s, ph, lg] = await Promise.all([
+    const [c, i, s, ph, lg, ac] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
       sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false }),
-      sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000)
+      sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000),
+      sb.from("activities").select("*").eq("household_id", hid).order("start_time")
     ]);
     state.children = c.data || [];
     state.items = i.data || [];
     state.shopping = s.data || [];
     state.photos = ph.data || [];
     state.logs = lg.data || [];
+    state.activities = ac.data || [];
     await loadPhotoUrls();
   }
 
@@ -165,7 +167,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -486,6 +488,10 @@
 
     const groups = {};
     upcoming.forEach((it) => { (groups[dayKey(it.due_at)] ||= []).push(it); });
+    state.activities.filter((a) => state.filter === "all" || a.child_id === state.filter).forEach((a) => {
+      occurrences(a, today, new Date(horizon.getTime() - 1)).forEach((o) => { (groups[dayKey(o.start)] ||= []).push({ occ: o, sortAt: o.start }); });
+    });
+    Object.values(groups).forEach((l) => l.sort((x, y) => new Date(x.sortAt || x.due_at) - new Date(y.sortAt || y.due_at)));
     const keys = Object.keys(groups).sort();
     if (!keys.includes(today.toISOString())) keys.unshift(today.toISOString());
 
@@ -525,7 +531,7 @@
       const list = groups[k] || [];
       const isToday = k === today.toISOString();
       html += `<section class="day"><div class="day-title ${isToday ? "today" : ""}">${fmtDay(k)}</div>
-        ${list.length ? list.map((i) => itemHtml(i)).join("") : `<p class="muted small">Rien de prévu. Appuie sur + pour ajouter un rendez-vous ou une tâche.</p>`}</section>`;
+        ${list.length ? list.map((i) => i.occ ? occHtml(i.occ) : itemHtml(i)).join("") : `<p class="muted small">Rien de prévu. Appuie sur + pour ajouter un rendez-vous ou une tâche.</p>`}</section>`;
     });
 
     if (todo.length) html += `<section class="day"><div class="day-title">À faire, sans date</div>${todo.map((i) => itemHtml(i)).join("")}</section>`;
@@ -568,6 +574,12 @@
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
+    const acts = state.activities.filter((a) => a.child_id === id);
+    html += `<h2>🎯 Activités</h2>
+      ${acts.map((a) => `<div class="item" style="--c:${esc(c.color)}"><div class="tab"></div><div class="body" data-act="${a.id}" role="button" tabindex="0">
+        <div class="line1"><span class="title">${esc(a.emoji)} ${esc(a.name)}</span></div>
+        <div class="meta">${esc(actSchedule(a))}${a.location ? " · " + esc(a.location) : ""}${a.end_date ? " · jusqu'au " + parseYmd(a.end_date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : ""}</div></div></div>`).join("")}
+      <button class="btn ghost block" data-act-add="${c.id}">Ajouter une activité</button>`;
     const album = state.photos.filter((p) => p.child_id === id);
     html += `<h2>📸 Album</h2>
       <div class="album">
@@ -823,7 +835,9 @@
 
   function logPicker(c) {
     openSheet(`<h2 style="margin-top:0">${esc(c.first_name)} : noter</h2>${quickGrid(c)}
-      <button class="btn ghost block" style="margin-top:14px" id="lp-item">📅 Rendez-vous, tâche ou note</button>`, (el) => {
+      <button class="btn ghost block" style="margin-top:14px" id="lp-item">📅 Rendez-vous, tâche ou note</button>
+      <button class="btn ghost block" style="margin-top:10px" id="lp-act">🎯 Activité régulière</button>`, (el) => {
+      el.querySelector("#lp-act").onclick = () => activityForm(c.id);
       el.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => logForm(c, b.dataset.log));
       el.querySelector("#lp-item").onclick = () => itemForm(null, { child_id: c.id });
     });
@@ -898,42 +912,184 @@
     });
   }
 
+  // ---------- Activités extrascolaires (récurrentes) ----------
+  const DAY_SHORT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+  const DAY_LETTER = ["L", "M", "M", "J", "V", "S", "D"];
+  const ACT_EMOJIS = ["⚽", "🏊", "🎵", "🎹", "🎸", "🎨", "🥋", "🤸", "💃", "🎾", "🏀", "🏉", "🐴", "🎭", "📚", "🧩", "🚴", "⛸️", "🏓", "🎯"];
+  const isoDow = (d) => ((d.getDay() + 6) % 7) + 1;
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const parseYmd = (s) => { const [y, m, dd] = s.split("-").map(Number); return new Date(y, m - 1, dd); };
+  const mondayOf = (d) => { const x = startOfDay(d); x.setDate(x.getDate() - (isoDow(x) - 1)); return x; };
+  const hm = (t) => (t || "").slice(0, 5);
+  const atTime = (dateStr, t) => { const d = parseYmd(dateStr); const [h, m] = t.split(":").map(Number); d.setHours(h, m, 0, 0); return d; };
+  const schoolYearEnd = () => { const n = new Date(); const y = n.getMonth() >= 6 ? n.getFullYear() + 1 : n.getFullYear(); return `${y}-07-04`; };
+  const memberName = (uid) => { const m = state.members.find((x) => x.user_id === uid); return m ? m.display_name : ""; };
+
+  function occurrences(a, from, to) {
+    const out = [];
+    const start = parseYmd(a.start_date);
+    const end = a.end_date ? parseYmd(a.end_date) : null;
+    const anchor = mondayOf(start);
+    const d = startOfDay(from > start ? from : start);
+    const skips = new Set(a.skip_dates || []);
+    while (d <= to && (!end || d <= end)) {
+      const weeks = Math.round((mondayOf(d) - anchor) / (7 * 86400000));
+      if (a.weekdays.includes(isoDow(d)) && weeks % (a.interval_weeks || 1) === 0) {
+        const ds = ymd(d);
+        out.push({ act: a, date: ds, start: atTime(ds, a.start_time), skipped: skips.has(ds) });
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+  const actSchedule = (a) => {
+    const days = [...a.weekdays].sort().map((n) => DAY_SHORT[n - 1]).join(", ");
+    return `${days} · ${hm(a.start_time)}${a.end_time ? "-" + hm(a.end_time) : ""}${a.interval_weeks > 1 ? ` · toutes les ${a.interval_weeks} semaines` : ""}`;
+  };
+  function occHtml(o) {
+    const a = o.act, child = childById(a.child_id);
+    const who = [a.drop_by ? "Dépose : " + memberName(a.drop_by) : "", a.pick_by ? "Récupère : " + memberName(a.pick_by) : ""].filter(Boolean).join(" · ");
+    return `<div class="item ${o.skipped ? "done" : ""}" style="--c:${esc(child ? child.color : "var(--ink-soft)")}">
+      <div class="tab"></div>
+      <div class="body" data-occ="${a.id}|${o.date}" role="button" tabindex="0">
+        <div class="line1"><span class="time">${hm(a.start_time)}${a.end_time ? "-" + hm(a.end_time) : ""}</span><span class="title">${esc(a.emoji)} ${esc(a.name)}${o.skipped ? " (annulé)" : ""}</span></div>
+        <div class="meta">${esc(child ? child.first_name : "")}${a.location ? " · " + esc(a.location) : ""}${who ? " · " + esc(who) : ""}</div>
+      </div></div>`;
+  }
+
+  function occSheet(a, date) {
+    const child = childById(a.child_id);
+    const skipped = (a.skip_dates || []).includes(date);
+    const tel = a.contact && /[0-9]{6,}/.test(a.contact.replace(/[\s.]/g, "")) ? a.contact.replace(/[^\d+]/g, "") : null;
+    openSheet(`
+      <h2 style="margin-top:0">${esc(a.emoji)} ${esc(a.name)}</h2>
+      <p class="muted" style="margin-top:4px">${esc(child ? child.first_name : "")} · ${fmtDay(parseYmd(date))}, ${hm(a.start_time)}${a.end_time ? "-" + hm(a.end_time) : ""}</p>
+      ${a.location ? `<p>📍 ${esc(a.location)}</p>` : ""}
+      ${a.drop_by || a.pick_by ? `<p>🚗 ${[a.drop_by ? "Dépose : " + esc(memberName(a.drop_by)) : "", a.pick_by ? "Récupère : " + esc(memberName(a.pick_by)) : ""].filter(Boolean).join("<br>")}</p>` : ""}
+      ${a.contact ? `<p>☎️ ${tel ? `<a href="tel:${esc(tel)}">${esc(a.contact)}</a>` : esc(a.contact)}</p>` : ""}
+      ${a.notes ? `<p class="muted">${esc(a.notes)}</p>` : ""}
+      <div class="actions">
+        <button class="btn ghost" id="occ-skip">${skipped ? "Rétablir cette séance" : "Annuler cette séance"}</button>
+        <button class="btn" id="occ-edit">Modifier l'activité</button>
+      </div>`, (el) => {
+      el.querySelector("#occ-edit").onclick = () => activityForm(a.child_id, a);
+      el.querySelector("#occ-skip").onclick = async () => {
+        const set = new Set(a.skip_dates || []);
+        skipped ? set.delete(date) : set.add(date);
+        const { error } = await sb.from("activities").update({ skip_dates: [...set].sort() }).eq("id", a.id);
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(skipped ? "Séance rétablie" : "Séance annulée");
+      };
+    });
+  }
+
+  function activityForm(childId, a) {
+    const child = childById(childId);
+    const v = a || { name: "", emoji: "⚽", weekdays: [], start_time: "", end_time: "", start_date: ymd(new Date()), end_date: schoolYearEnd(), interval_weeks: 1, location: "", contact: "", notes: "", drop_by: null, pick_by: null, skip_dates: [] };
+    let emoji = v.emoji, days = new Set(v.weekdays), interval = v.interval_weeks || 1;
+    const memberOpts = (sel) => `<option value="">Pas défini</option>${state.members.map((m) => `<option value="${m.user_id}" ${m.user_id === sel ? "selected" : ""}>${esc(m.display_name)}</option>`).join("")}`;
+    const futureSkips = (v.skip_dates || []).filter((d) => d >= ymd(new Date()));
+    openSheet(`
+      <h2 style="margin-top:0">${a ? "Modifier l'activité" : "Nouvelle activité"} · ${esc(child.first_name)}</h2>
+      <form id="af">
+        <label for="af-name">Activité</label>
+        <input id="af-name" required maxlength="80" value="${esc(v.name)}" placeholder="Ex : Foot, Piano, Natation">
+        <div class="seg emoji-seg" id="af-emoji" style="margin-top:8px">${ACT_EMOJIS.map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
+        <label>Jours</label>
+        <div class="days" id="af-days">${DAY_LETTER.map((l, i) => `<button type="button" data-v="${i + 1}" aria-pressed="${days.has(i + 1)}" aria-label="${DAY_SHORT[i]}">${l}</button>`).join("")}</div>
+        <div class="row">
+          <div><label for="af-start">Début</label><input id="af-start" type="time" required value="${hm(v.start_time)}"></div>
+          <div><label for="af-end">Fin</label><input id="af-end" type="time" required value="${hm(v.end_time)}"></div>
+        </div>
+        <label>Ça se répète</label>
+        <div class="seg" id="af-int">${[[1, "Chaque semaine"], [2, "Toutes les 2 semaines"]].map(([n, l]) => `<button type="button" data-v="${n}" aria-pressed="${n === interval}">${l}</button>`).join("")}</div>
+        <div class="row">
+          <div><label for="af-from">Du</label><input id="af-from" type="date" required value="${esc(v.start_date)}"></div>
+          <div><label for="af-to">Au</label><input id="af-to" type="date" value="${esc(v.end_date || "")}"></div>
+        </div>
+        <p class="muted small" style="margin:6px 0 0">Par défaut jusqu'à la fin de l'année scolaire. Laisse "Au" vide si ça ne s'arrête pas.</p>
+        <label for="af-loc">Lieu</label>
+        <input id="af-loc" maxlength="150" value="${esc(v.location || "")}" placeholder="Ex : Gymnase Jean Moulin">
+        <div class="row">
+          <div><label for="af-drop">Qui dépose</label><select id="af-drop">${memberOpts(v.drop_by)}</select></div>
+          <div><label for="af-pick">Qui récupère</label><select id="af-pick">${memberOpts(v.pick_by)}</select></div>
+        </div>
+        <label for="af-contact">Contact</label>
+        <input id="af-contact" maxlength="150" value="${esc(v.contact || "")}" placeholder="Ex : Coach Karim 06 12 34 56 78">
+        <label for="af-notes">Notes</label>
+        <textarea id="af-notes" maxlength="1000" placeholder="Ex : prendre le sac de sport et la gourde">${esc(v.notes || "")}</textarea>
+        ${futureSkips.length ? `<label>Séances annulées</label><div class="seg">${futureSkips.map((d) => `<button type="button" data-unskip="${d}">${parseYmd(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })} ×</button>`).join("")}</div>` : ""}
+        <div id="af-err" class="error" hidden></div>
+        <div class="actions">
+          ${a ? `<button type="button" class="btn danger" id="af-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="af-cancel">Annuler</button>`}
+          <button class="btn" type="submit">${a ? "Enregistrer" : "Ajouter"}</button>
+        </div>
+      </form>`, (el) => {
+      let skips = new Set(v.skip_dates || []);
+      el.querySelector("#af-emoji").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return; emoji = b.dataset.v;
+        el.querySelectorAll("#af-emoji button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      });
+      el.querySelector("#af-days").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return; const n = Number(b.dataset.v);
+        days.has(n) ? days.delete(n) : days.add(n); b.setAttribute("aria-pressed", days.has(n));
+      });
+      el.querySelector("#af-int").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return; interval = Number(b.dataset.v);
+        el.querySelectorAll("#af-int button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      });
+      el.querySelectorAll("[data-unskip]").forEach((b) => b.onclick = () => { skips.delete(b.dataset.unskip); b.remove(); });
+      const cancel = el.querySelector("#af-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#af-del");
+      if (del) del.onclick = async () => {
+        if (!confirm(`Supprimer l'activité ${a.name} et toutes ses séances ?`)) return;
+        await sb.from("activities").delete().eq("id", a.id);
+        closeSheet(); await loadAll(); render(); toast("Activité supprimée");
+      };
+      el.querySelector("#af").onsubmit = async (e) => {
+        e.preventDefault();
+        const err = el.querySelector("#af-err"); err.hidden = true;
+        const fail = (m) => { err.hidden = false; err.textContent = m; };
+        const val = (id) => el.querySelector(id).value.trim();
+        if (!val("#af-name")) return fail("Indique le nom de l'activité.");
+        if (!days.size) return fail("Choisis au moins un jour.");
+        if (!val("#af-start") || !val("#af-end")) return fail("Indique l'heure de début et de fin.");
+        if (val("#af-end") <= val("#af-start")) return fail("L'heure de fin doit être après l'heure de début.");
+        if (val("#af-to") && val("#af-to") < val("#af-from")) return fail("La date de fin doit être après la date de début.");
+        const row = {
+          name: val("#af-name"), emoji, weekdays: [...days].sort(), start_time: val("#af-start"), end_time: val("#af-end"),
+          interval_weeks: interval, start_date: val("#af-from"), end_date: val("#af-to") || null,
+          location: val("#af-loc") || null, contact: val("#af-contact") || null, notes: val("#af-notes") || null,
+          drop_by: val("#af-drop") || null, pick_by: val("#af-pick") || null, skip_dates: [...skips].sort()
+        };
+        const { error } = a
+          ? await sb.from("activities").update(row).eq("id", a.id)
+          : await sb.from("activities").insert({ ...row, household_id: state.household.id, child_id: child.id });
+        if (error) return fail(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(a ? "Activité modifiée" : "Activité ajoutée");
+      };
+    });
+  }
+
   // ---------- Album ----------
   function photoForm(childId, photo) {
     const child = childById(childId || photo.child_id);
-    let blob = null;
     const today = new Date().toISOString().slice(0, 10);
+    if (!photo) return photoMultiForm(child, today);
     openSheet(`
-      <h2 style="margin-top:0">${photo ? "Photo de " : "Album de "}${esc(child.first_name)}</h2>
+      <h2 style="margin-top:0">Photo de ${esc(child.first_name)}</h2>
       <form id="pf">
-        <div class="pf-preview" id="pf-preview">${photo && state.photoUrls[photo.path]
-          ? `<img src="${esc(state.photoUrls[photo.path])}" alt="">`
-          : `<label for="pf-file" class="pf-pick"><span>📷</span>Choisir une photo</label>`}</div>
-        <input id="pf-file" type="file" accept="image/*" hidden>
+        <div class="pf-preview">${state.photoUrls[photo.path] ? `<img src="${esc(state.photoUrls[photo.path])}" alt="">` : ""}</div>
         <label for="pf-note">Note</label>
-        <textarea id="pf-note" maxlength="1000" placeholder="Ex : Ses premiers pas dans le salon !">${esc(photo ? photo.note || "" : "")}</textarea>
+        <textarea id="pf-note" maxlength="1000" placeholder="Ex : Ses premiers pas dans le salon !">${esc(photo.note || "")}</textarea>
         <label for="pf-date">Date</label>
-        <input id="pf-date" type="date" max="${today}" value="${photo ? photo.taken_on : today}">
+        <input id="pf-date" type="date" max="${today}" value="${photo.taken_on}">
         <div class="actions">
-          ${photo ? `<button type="button" class="btn danger" id="pf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="pf-cancel">Annuler</button>`}
-          <button class="btn" type="submit">${photo ? "Enregistrer" : "Ajouter à l'album"}</button>
+          <button type="button" class="btn danger" id="pf-del">Supprimer</button>
+          <button class="btn" type="submit">Enregistrer</button>
         </div>
       </form>`, (el) => {
-      const file = el.querySelector("#pf-file");
-      file.onchange = async (e) => {
-        const f = e.target.files[0]; if (!f) return;
-        try {
-          blob = await resizePhoto(f, 1600);
-          el.querySelector("#pf-preview").innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`;
-          if (f.lastModified) {
-            const d = new Date(f.lastModified).toISOString().slice(0, 10);
-            if (d <= today) el.querySelector("#pf-date").value = d;
-          }
-        } catch (_) { toast("Format de photo non pris en charge. Essaie une autre image."); }
-      };
-      const cancel = el.querySelector("#pf-cancel"); if (cancel) cancel.onclick = closeSheet;
-      const del = el.querySelector("#pf-del");
-      if (del) del.onclick = async () => {
+      el.querySelector("#pf-del").onclick = async () => {
         if (!confirm("Supprimer cette photo de l'album ?")) return;
         await sb.from("photos").delete().eq("id", photo.id);
         await sb.storage.from("child-photos").remove([photo.path]);
@@ -941,26 +1097,87 @@
       };
       el.querySelector("#pf").onsubmit = async (e) => {
         e.preventDefault();
-        const note = el.querySelector("#pf-note").value.trim() || null;
-        const taken_on = el.querySelector("#pf-date").value || today;
-        const btn = el.querySelector("#pf button[type=submit]");
-        if (photo) {
-          const { error } = await sb.from("photos").update({ note, taken_on }).eq("id", photo.id);
-          if (error) return toast(errMsg(error));
-          closeSheet(); await loadAll(); render(); return toast("Modifications enregistrées");
+        const { error } = await sb.from("photos").update({ note: el.querySelector("#pf-note").value.trim() || null, taken_on: el.querySelector("#pf-date").value || today }).eq("id", photo.id);
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast("Modifications enregistrées");
+      };
+    });
+  }
+
+  // Ajout d'une ou plusieurs photos d'un coup, avec une note par photo (facultative)
+  function photoMultiForm(child, today) {
+    const MAX = 20;
+    let picks = []; // { blob, url, date, note }
+    openSheet(`
+      <h2 style="margin-top:0">Album de ${esc(child.first_name)}</h2>
+      <form id="pm">
+        <label for="pm-file" class="pf-pick pf-preview" id="pm-pick"><span>📷</span>Choisir une ou plusieurs photos</label>
+        <input id="pm-file" type="file" accept="image/*" multiple hidden>
+        <div id="pm-list"></div>
+        <div id="pm-common" hidden>
+          <label for="pm-note-all">Note pour toutes les photos (facultatif)</label>
+          <input id="pm-note-all" maxlength="1000" placeholder="Ex : Vacances à la mer">
+        </div>
+        <p class="muted small" id="pm-status"></p>
+        <div class="actions">
+          <button type="button" class="btn ghost" id="pm-cancel">Annuler</button>
+          <button class="btn" type="submit" id="pm-submit" disabled>Ajouter à l'album</button>
+        </div>
+      </form>`, (el) => {
+      const list = el.querySelector("#pm-list"), submit = el.querySelector("#pm-submit"), status = el.querySelector("#pm-status");
+      const draw = () => {
+        list.innerHTML = picks.map((p, i) => `
+          <div class="pm-row">
+            <img src="${p.url}" alt="">
+            <div class="pm-fields">
+              <input data-note="${i}" maxlength="1000" value="${esc(p.note)}" placeholder="Note (facultatif)">
+              <input data-date="${i}" type="date" max="${today}" value="${p.date}">
+            </div>
+            <button type="button" class="del" data-rm="${i}" aria-label="Retirer cette photo">×</button>
+          </div>`).join("");
+        el.querySelector("#pm-common").hidden = picks.length < 2;
+        el.querySelector("#pm-pick").innerHTML = picks.length ? `<span>➕</span>Ajouter d'autres photos` : `<span>📷</span>Choisir une ou plusieurs photos`;
+        el.querySelector("#pm-pick").classList.toggle("compact", picks.length > 0);
+        submit.disabled = !picks.length;
+        submit.textContent = picks.length > 1 ? `Ajouter les ${picks.length} photos` : "Ajouter à l'album";
+        list.querySelectorAll("[data-note]").forEach((n) => n.oninput = () => { picks[n.dataset.note].note = n.value; });
+        list.querySelectorAll("[data-date]").forEach((n) => n.onchange = () => { picks[n.dataset.date].date = n.value || today; });
+        list.querySelectorAll("[data-rm]").forEach((b) => b.onclick = () => { URL.revokeObjectURL(picks[b.dataset.rm].url); picks.splice(Number(b.dataset.rm), 1); draw(); });
+      };
+      el.querySelector("#pm-file").onchange = async (e) => {
+        const files = [...e.target.files].slice(0, MAX - picks.length);
+        if (e.target.files.length > files.length) toast(`${MAX} photos maximum par envoi`);
+        status.textContent = "Préparation des photos...";
+        for (const f of files) {
+          try {
+            const blob = await resizePhoto(f, 1600);
+            let date = today;
+            if (f.lastModified) { const d = new Date(f.lastModified).toISOString().slice(0, 10); if (d <= today) date = d; }
+            picks.push({ blob, url: URL.createObjectURL(blob), date, note: "" });
+          } catch (_) { toast(`${f.name} n'a pas pu être lue`); }
         }
-        if (!blob) return toast("Choisis d'abord une photo");
-        btn.disabled = true; btn.textContent = "Envoi...";
-        const path = `${state.household.id}/${child.id}/album/${Date.now()}.jpg`;
-        const up = await sb.storage.from("child-photos").upload(path, blob, { contentType: "image/jpeg" });
-        if (up.error) { btn.disabled = false; btn.textContent = "Ajouter à l'album"; return toast("La photo n'a pas pu être envoyée. Réessaie."); }
-        const { error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: child.id, path, note, taken_on, created_by: state.session.user.id });
-        if (error) {
-          await sb.storage.from("child-photos").remove([path]);
-          btn.disabled = false; btn.textContent = "Ajouter à l'album";
-          return toast(errMsg(error));
+        status.textContent = ""; e.target.value = ""; draw();
+      };
+      el.querySelector("#pm-cancel").onclick = () => { picks.forEach((p) => URL.revokeObjectURL(p.url)); closeSheet(); };
+      el.querySelector("#pm").onsubmit = async (e) => {
+        e.preventDefault();
+        if (!picks.length) return;
+        const common = el.querySelector("#pm-note-all").value.trim();
+        submit.disabled = true;
+        let ok = 0, failMsg = "";
+        for (let i = 0; i < picks.length; i++) {
+          status.textContent = `Envoi ${i + 1} sur ${picks.length}...`;
+          const p = picks[i];
+          const path = `${state.household.id}/${child.id}/album/${Date.now()}-${i}.jpg`;
+          const up = await sb.storage.from("child-photos").upload(path, p.blob, { contentType: "image/jpeg" });
+          if (up.error) { failMsg = "Une photo n'a pas pu être envoyée."; continue; }
+          const { error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: child.id, path, note: p.note.trim() || common || null, taken_on: p.date, created_by: state.session.user.id });
+          if (error) { await sb.storage.from("child-photos").remove([path]); failMsg = errMsg(error); if (/quota/i.test(error.message)) break; continue; }
+          ok++;
         }
-        closeSheet(); await loadAll(); render(); toast("Photo ajoutée à l'album");
+        picks.forEach((p) => URL.revokeObjectURL(p.url));
+        closeSheet(); await loadAll(); render();
+        toast(failMsg ? `${ok} photo${ok > 1 ? "s" : ""} ajoutée${ok > 1 ? "s" : ""}. ${failMsg}` : `${ok} photo${ok > 1 ? "s" : ""} ajoutée${ok > 1 ? "s" : ""} à l'album`);
       };
     });
   }
@@ -1147,6 +1364,15 @@
       await sb.from("items").update({ done: it.done }).eq("id", it.id);
     });
     const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-act-add]").forEach((b) => b.onclick = () => activityForm(b.dataset.actAdd));
+    $app.querySelectorAll("[data-act]").forEach((b) => {
+      const open = () => { const a = state.activities.find((x) => x.id === b.dataset.act); activityForm(a.child_id, a); };
+      b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); };
+    });
+    $app.querySelectorAll("[data-occ]").forEach((b) => {
+      const open = () => { const [aid, date] = b.dataset.occ.split("|"); occSheet(state.activities.find((x) => x.id === aid), date); };
+      b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); };
+    });
     $app.querySelectorAll("[data-album-add]").forEach((b) => b.onclick = () => photoForm(b.dataset.albumAdd));
     $app.querySelectorAll("[data-photo]").forEach((b) => b.onclick = () => photoForm(null, state.photos.find((p) => p.id === b.dataset.photo)));
     $app.querySelectorAll("[data-cal]").forEach((b) => b.onclick = () => calSheet(b.dataset.cal));
@@ -1267,7 +1493,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

@@ -1,0 +1,704 @@
+(() => {
+  "use strict";
+
+  const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
+  const $app = document.getElementById("app");
+
+  const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
+  const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
+  const TYPES = {
+    rdv:    { label: "Rendez-vous", ico: "📅" },
+    tache:  { label: "Tâche",       ico: "✅" },
+    sante:  { label: "Santé",       ico: "💊" },
+    note:   { label: "Note",        ico: "📝" },
+    taille: { label: "Taille",      ico: "📏" }
+  };
+  const SHOP_CATS = ["Fruits & légumes", "Frais", "Épicerie", "Bébé", "Hygiène", "Maison", "Autre"];
+
+  const state = {
+    session: null, household: null, me: null, members: [],
+    children: [], items: [], shopping: [],
+    filter: "all", channel: null, photoUrls: {}
+  };
+
+  // ---------- Utils ----------
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const toast = (msg) => {
+    const t = document.getElementById("toast");
+    t.textContent = msg; t.classList.add("show");
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2200);
+  };
+  const childById = (id) => state.children.find((c) => c.id === id);
+  const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const dayKey = (d) => startOfDay(d).toISOString();
+  const fmtTime = (d) => new Date(d).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const fmtDay = (d) => {
+    const diff = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000);
+    if (diff === 0) return "Aujourd'hui";
+    if (diff === 1) return "Demain";
+    if (diff === -1) return "Hier";
+    const s = new Date(d).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  const age = (birth) => {
+    if (!birth) return "";
+    const b = new Date(birth), n = new Date();
+    let months = (n.getFullYear() - b.getFullYear()) * 12 + (n.getMonth() - b.getMonth());
+    if (n.getDate() < b.getDate()) months--;
+    if (months < 0) return "";
+    if (months < 24) return months + " mois";
+    return Math.floor(months / 12) + " ans";
+  };
+  const toLocalInput = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const errMsg = (e) => {
+    const m = (e && e.message) || "";
+    if (/Invalid login credentials/i.test(m)) return "Email ou mot de passe incorrect.";
+    if (/Email not confirmed/i.test(m)) return "Confirme ton email avec le lien reçu, puis connecte-toi.";
+    if (/already registered/i.test(m)) return "Un compte existe déjà avec cet email. Connecte-toi.";
+    if (/Password should be/i.test(m)) return "Le mot de passe doit faire au moins 6 caractères.";
+    if (/code invalide/i.test(m)) return "Ce code ne correspond à aucune tribu. Vérifie-le.";
+    return m || "Une erreur est survenue. Réessaie.";
+  };
+
+  // ---------- Sheet (modal) ----------
+  function openSheet(html, onMount) {
+    closeSheet();
+    const bd = document.createElement("div");
+    bd.className = "sheet-backdrop";
+    bd.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+    bd.addEventListener("click", (e) => { if (e.target === bd) closeSheet(); });
+    document.body.appendChild(bd);
+    document.addEventListener("keydown", escClose);
+    onMount && onMount(bd.querySelector(".sheet"));
+    const f = bd.querySelector("input, select, textarea");
+    if (f && window.matchMedia("(min-width: 700px)").matches) f.focus();
+  }
+  function escClose(e) { if (e.key === "Escape") closeSheet(); }
+  function closeSheet() {
+    document.querySelectorAll(".sheet-backdrop").forEach((n) => n.remove());
+    document.removeEventListener("keydown", escClose);
+  }
+
+  // ---------- Data ----------
+  async function loadHousehold() {
+    const uid = state.session.user.id;
+    const { data: mem } = await sb.from("members").select("household_id, display_name, role").eq("user_id", uid).limit(1);
+    if (!mem || !mem.length) { state.household = null; return; }
+    state.me = mem[0];
+    const hid = mem[0].household_id;
+    const [h, m] = await Promise.all([
+      sb.from("households").select("*").eq("id", hid).single(),
+      sb.from("members").select("user_id, display_name, role").eq("household_id", hid)
+    ]);
+    state.household = h.data;
+    state.members = m.data || [];
+    await loadAll();
+    subscribe();
+  }
+
+  async function loadAll() {
+    const hid = state.household.id;
+    const [c, i, s] = await Promise.all([
+      sb.from("children").select("*").eq("household_id", hid).order("created_at"),
+      sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
+      sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at")
+    ]);
+    state.children = c.data || [];
+    state.items = i.data || [];
+    state.shopping = s.data || [];
+    await loadPhotoUrls();
+  }
+
+  async function loadPhotoUrls() {
+    const missing = state.children.map((c) => c.photo_path).filter((p) => p && !state.photoUrls[p]);
+    if (!missing.length) return;
+    const { data } = await sb.storage.from("child-photos").createSignedUrls(missing, 60 * 60 * 24);
+    (data || []).forEach((d) => { if (d.signedUrl) state.photoUrls[d.path] = d.signedUrl; });
+  }
+  const avatar = (c) => c.photo_path && state.photoUrls[c.photo_path]
+    ? `<img src="${esc(state.photoUrls[c.photo_path])}" alt="">`
+    : esc(c.emoji);
+
+  // Redimensionne la photo côté téléphone avant envoi (600 px, JPEG) : rapide et léger.
+  async function resizePhoto(file) {
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const max = 600, r = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * r), h = Math.round(bmp.height * r);
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+    return await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+  }
+
+  function subscribe() {
+    if (state.channel) sb.removeChannel(state.channel);
+    const hid = state.household.id;
+    let timer;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
+    state.channel = sb.channel("tribu-" + hid);
+    ["children", "items", "shopping_items"].forEach((table) => {
+      state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
+    });
+    state.channel.subscribe();
+  }
+
+  // ---------- Render router ----------
+  function route() { return (location.hash || "#/accueil").slice(2).split("/"); }
+
+  function render() {
+    if (!state.session) return renderAuth();
+    if (!state.household) return renderOnboarding();
+    const [page, id] = route();
+    let body = "";
+    if (page === "enfants") body = viewChildren();
+    else if (page === "enfant") body = viewChild(id);
+    else if (page === "courses") body = viewShopping();
+    else if (page === "reglages") body = viewSettings();
+    else body = viewHome();
+    const active = page === "enfant" ? "enfants" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
+    const showFab = active === "accueil" || page === "enfant";
+    $app.innerHTML = `
+      <main class="wrap">${body}</main>
+      ${showFab ? `<button class="fab" id="fab" aria-label="Ajouter un élément">+</button>` : ""}
+      <nav class="nav" aria-label="Navigation"><ul>
+        ${navLink("accueil", "🏠", "Accueil", active)}
+        ${navLink("enfants", "👧", "Enfants", active)}
+        ${navLink("courses", "🛒", "Courses", active)}
+        ${navLink("reglages", "⚙️", "Tribu", active)}
+      </ul></nav>`;
+    bindCommon();
+  }
+  const navLink = (key, ico, label, active) =>
+    `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${label}</a></li>`;
+
+  // ---------- Auth ----------
+  function renderAuth(mode = "login") {
+    const isLogin = mode === "login";
+    $app.innerHTML = `
+      <div class="hero">
+        <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
+        <h1>Tribu</h1>
+        <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
+        <form class="card" id="auth" novalidate>
+          <h3>${isLogin ? "Se connecter" : "Créer un compte"}</h3>
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="email" required>
+          <label for="pwd">Mot de passe</label>
+          <input id="pwd" type="password" autocomplete="${isLogin ? "current-password" : "new-password"}" minlength="6" required>
+          <div id="err" class="error" hidden></div>
+          <button class="btn block" style="margin-top:18px" type="submit">${isLogin ? "Se connecter" : "Créer mon compte"}</button>
+          <button class="link" type="button" id="switch">${isLogin ? "Pas encore de compte ? Créer un compte" : "Déjà un compte ? Se connecter"}</button>
+          ${isLogin ? `<button class="link small" type="button" id="forgot">Mot de passe oublié</button>` : ""}
+        </form>
+      </div>`;
+    const form = document.getElementById("auth");
+    const err = document.getElementById("err");
+    document.getElementById("switch").onclick = () => renderAuth(isLogin ? "signup" : "login");
+    const forgot = document.getElementById("forgot");
+    if (forgot) forgot.onclick = async () => {
+      const email = document.getElementById("email").value.trim();
+      if (!email) { err.hidden = false; err.textContent = "Saisis ton email puis appuie à nouveau sur Mot de passe oublié."; return; }
+      await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      toast("Email de réinitialisation envoyé");
+    };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      err.hidden = true;
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("pwd").value;
+      const btn = form.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        if (isLogin) {
+          const { error } = await sb.auth.signInWithPassword({ email, password });
+          if (error) throw error;
+        } else {
+          const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+          if (error) throw error;
+          if (!data.session) {
+            form.innerHTML = `<h3>Vérifie ta boîte mail</h3><p class="muted">Un lien de confirmation a été envoyé à ${esc(email)}. Clique dessus, puis reviens te connecter.</p><button class="btn block" type="button" id="back">Se connecter</button>`;
+            document.getElementById("back").onclick = () => renderAuth("login");
+          }
+        }
+      } catch (ex) {
+        err.hidden = false; err.textContent = errMsg(ex);
+      } finally { btn.disabled = false; }
+    };
+  }
+
+  // ---------- Onboarding ----------
+  function renderOnboarding(mode = "create") {
+    const create = mode === "create";
+    const params = new URLSearchParams(location.search);
+    const inviteCode = params.get("code") || "";
+    if (inviteCode && mode === "create" && !renderOnboarding._seen) { renderOnboarding._seen = true; return renderOnboarding("join"); }
+    $app.innerHTML = `
+      <div class="hero">
+        <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
+        <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
+        <form class="card" id="onb">
+          <label for="dn">Ton prénom</label>
+          <input id="dn" required maxlength="40" autocomplete="given-name" placeholder="Ex : Camille">
+          ${create
+            ? `<label for="hn">Nom de la tribu</label><input id="hn" required maxlength="60" placeholder="Ex : Famille Martin">`
+            : `<label for="code">Code d'invitation</label><input id="code" required maxlength="6" value="${esc(inviteCode)}" style="text-transform:uppercase;letter-spacing:.15em;font-weight:700" placeholder="ABC123">`}
+          <div id="err" class="error" hidden></div>
+          <button class="btn block" style="margin-top:18px" type="submit">${create ? "Créer la tribu" : "Rejoindre la tribu"}</button>
+          <button class="link" type="button" id="switch">${create ? "J'ai un code d'invitation" : "Créer une nouvelle tribu"}</button>
+          <button class="link small muted" type="button" id="logout">Se déconnecter</button>
+        </form>
+      </div>`;
+    document.getElementById("switch").onclick = () => renderOnboarding(create ? "join" : "create");
+    document.getElementById("logout").onclick = () => sb.auth.signOut();
+    document.getElementById("onb").onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err"); err.hidden = true;
+      const dn = document.getElementById("dn").value.trim();
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        const rpc = create
+          ? sb.rpc("create_household", { p_name: document.getElementById("hn").value.trim(), p_display_name: dn })
+          : sb.rpc("join_household", { p_code: document.getElementById("code").value.trim(), p_display_name: dn });
+        const { error } = await rpc;
+        if (error) throw error;
+        history.replaceState(null, "", location.pathname + "#/accueil");
+        await loadHousehold();
+        render();
+        toast(create ? "Tribu créée" : "Bienvenue dans la tribu");
+      } catch (ex) { err.hidden = false; err.textContent = errMsg(ex); }
+      finally { btn.disabled = false; }
+    };
+  }
+
+  // ---------- Views ----------
+  function chipsHtml(withAdd = true) {
+    const all = `<button class="chip" data-filter="all" aria-pressed="${state.filter === "all"}"><div class="bubble" style="--c:var(--line)">👪</div><span>Tous</span></button>`;
+    const kids = state.children.map((c) =>
+      `<button class="chip" data-filter="${c.id}" aria-pressed="${state.filter === c.id}"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div><span>${esc(c.first_name)}</span></button>`).join("");
+    const add = withAdd ? `<button class="chip add" id="add-child"><div class="bubble">+</div><span>Enfant</span></button>` : "";
+    return `<div class="chips" role="group" aria-label="Filtrer par enfant">${all}${kids}${add}</div>`;
+  }
+
+  function itemHtml(it, showDate = false) {
+    const child = childById(it.child_id);
+    const color = child ? child.color : "var(--ink-soft)";
+    const t = TYPES[it.type];
+    const who = child ? child.first_name : "Toute la famille";
+    const time = it.due_at ? (showDate ? new Date(it.due_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) + " " : "") + fmtTime(it.due_at) : "";
+    const checkable = it.type === "tache" || it.type === "rdv";
+    return `
+      <div class="item ${it.done ? "done" : ""}" style="--c:${esc(color)}">
+        <div class="tab"></div>
+        <div class="body" data-edit="${it.id}" role="button" tabindex="0">
+          <div class="line1">${time ? `<span class="time">${esc(time)}</span>` : ""}<span class="title">${t.ico} ${esc(it.title)}</span></div>
+          <div class="meta">${esc(who)} · ${t.label}${it.details ? " · " + esc(it.details.slice(0, 60)) : ""}</div>
+        </div>
+        ${checkable ? `<button class="check" data-toggle="${it.id}" aria-label="${it.done ? "Marquer comme non fait" : "Marquer comme fait"}"><i>${it.done ? "✓" : ""}</i></button>` : ""}
+      </div>`;
+  }
+
+  function viewHome() {
+    const now = new Date();
+    const today = startOfDay(now);
+    const horizon = new Date(today.getTime() + 14 * 86400000);
+    const f = (it) => state.filter === "all" || it.child_id === state.filter;
+    const items = state.items.filter(f);
+
+    const overdue = items.filter((it) => it.type === "tache" && !it.done && it.due_at && new Date(it.due_at) < today);
+    const upcoming = items.filter((it) => it.due_at && new Date(it.due_at) >= today && new Date(it.due_at) < horizon && it.type !== "taille");
+    const todo = items.filter((it) => it.type === "tache" && !it.done && !it.due_at);
+
+    const groups = {};
+    upcoming.forEach((it) => { (groups[dayKey(it.due_at)] ||= []).push(it); });
+    const keys = Object.keys(groups).sort();
+    if (!keys.includes(today.toISOString())) keys.unshift(today.toISOString());
+
+    const shopLeft = state.shopping.filter((s) => !s.checked).length;
+    const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+
+    let html = `
+      <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date">${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
+      ${chipsHtml()}`;
+
+    if (!state.children.length) {
+      html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
+    }
+
+    if (overdue.length) html += `<section class="day"><div class="day-title" style="color:var(--danger)">En retard</div>${overdue.map((i) => itemHtml(i, true)).join("")}</section>`;
+
+    keys.forEach((k) => {
+      const list = groups[k] || [];
+      const isToday = k === today.toISOString();
+      html += `<section class="day"><div class="day-title ${isToday ? "today" : ""}">${fmtDay(k)}</div>
+        ${list.length ? list.map((i) => itemHtml(i)).join("") : `<p class="muted small">Rien de prévu. Appuie sur + pour ajouter un rendez-vous ou une tâche.</p>`}</section>`;
+    });
+
+    if (todo.length) html += `<section class="day"><div class="day-title">À faire, sans date</div>${todo.map((i) => itemHtml(i)).join("")}</section>`;
+
+    html += `<section class="day"><a href="#/courses" class="item" style="--c:var(--accent);text-decoration:none;color:inherit"><div class="tab"></div><div class="body"><div class="title">🛒 Courses</div><div class="meta">${shopLeft ? shopLeft + " article" + (shopLeft > 1 ? "s" : "") + " à acheter" : "La liste est vide"}</div></div></a></section>`;
+    return html;
+  }
+
+  function viewChildren() {
+    let html = `<header class="top"><h1>Enfants</h1></header>`;
+    if (!state.children.length) {
+      return html + `<div class="empty"><strong>Aucun enfant pour l'instant</strong><br>Ajoute chaque enfant pour suivre ses rendez-vous, sa santé et ses tailles.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
+    }
+    html += state.children.map((c) => {
+      const n = state.items.filter((i) => i.child_id === c.id && i.due_at && new Date(i.due_at) >= startOfDay(new Date()) && !i.done).length;
+      return `<a href="#/enfant/${c.id}" class="item" style="--c:${esc(c.color)};text-decoration:none;color:inherit">
+        <div class="tab"></div>
+        <div class="body" style="display:flex;align-items:center;gap:14px">
+          <div class="bubble" style="width:48px;height:48px;border-radius:50%;background:${esc(c.color)};display:grid;place-items:center;font-size:1.5rem;flex:0 0 auto;overflow:hidden">${avatar(c)}</div>
+          <div><div class="title">${esc(c.first_name)}</div><div class="meta">${[age(c.birth_date), n ? n + " à venir" : ""].filter(Boolean).join(" · ") || "Aucun élément à venir"}</div></div>
+        </div></a>`;
+    }).join("");
+    html += `<button class="btn ghost block" style="margin-top:14px" id="add-child-empty">Ajouter un enfant</button>`;
+    return html;
+  }
+
+  function viewChild(id) {
+    const c = childById(id);
+    if (!c) { location.hash = "#/enfants"; return ""; }
+    const items = state.items.filter((i) => i.child_id === id);
+    let html = `
+      <button class="back" onclick="history.length > 1 ? history.back() : (location.hash='#/enfants')">‹ Enfants</button>
+      <div class="child-head"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
+        <div><h1>${esc(c.first_name)}</h1><div class="muted">${[age(c.birth_date), c.birth_date ? "né(e) le " + new Date(c.birth_date).toLocaleDateString("fr-FR") : ""].filter(Boolean).join(" · ")}</div></div></div>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" id="edit-child" data-id="${c.id}">Modifier</button><button class="btn" id="add-for-child" data-id="${c.id}">Ajouter</button></div>
+      <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>`;
+    Object.entries(TYPES).forEach(([type, t]) => {
+      let list = items.filter((i) => i.type === type);
+      if (type === "rdv" || type === "tache") list = list.sort((a, b) => (a.done - b.done) || ((a.due_at || "9") > (b.due_at || "9") ? 1 : -1));
+      html += `<h2>${t.ico} ${t.label}${type === "taille" ? "s" : type === "note" ? "s" : ""}</h2>`;
+      html += list.length ? list.map((i) => itemHtml(i, true)).join("") : `<p class="muted small">Rien pour l'instant.</p>`;
+    });
+    return html;
+  }
+
+  function viewShopping() {
+    let html = `<header class="top"><h1>Courses</h1></header>
+      <form class="add-bar" id="shop-add">
+        <input id="shop-name" placeholder="Ajouter un article" maxlength="100" aria-label="Article" autocomplete="off">
+        <select id="shop-cat" aria-label="Rayon">${SHOP_CATS.map((c) => `<option>${c}</option>`).join("")}</select>
+        <button class="btn" type="submit" aria-label="Ajouter">+</button>
+      </form>`;
+    if (!state.shopping.length) return html + `<div class="empty"><strong>La liste est vide</strong><br>Ajoute un article : il apparaît aussitôt chez chaque membre de la tribu.</div>`;
+    const left = state.shopping.filter((s) => !s.checked);
+    const done = state.shopping.filter((s) => s.checked);
+    SHOP_CATS.forEach((cat) => {
+      const list = left.filter((s) => s.category === cat);
+      if (list.length) html += `<h2>${cat}</h2>${list.map(shopHtml).join("")}`;
+    });
+    if (done.length) {
+      html += `<h2 class="muted">Dans le panier</h2>${done.map(shopHtml).join("")}
+        <button class="btn ghost block" style="margin-top:12px" id="shop-clear">Vider le panier (${done.length})</button>`;
+    }
+    return html;
+  }
+  const shopHtml = (s) => `<div class="shop ${s.checked ? "done" : ""}">
+      <button class="check" data-shop="${s.id}" aria-label="${s.checked ? "Remettre dans la liste" : "Mettre dans le panier"}"><i>${s.checked ? "✓" : ""}</i></button>
+      <span class="name">${esc(s.name)}</span>
+      <button class="del" data-shop-del="${s.id}" aria-label="Supprimer ${esc(s.name)}">×</button></div>`;
+
+  function viewSettings() {
+    const link = location.origin + location.pathname + "?code=" + state.household.invite_code;
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+    return `<header class="top"><h1>Tribu</h1></header>
+      <div class="card">
+        <h3>Inviter un membre</h3>
+        <p class="muted small">Partage ce code avec l'autre parent ou un proche pour qu'il rejoigne ${esc(state.household.name)}.</p>
+        <div class="code">${esc(state.household.invite_code)}</div>
+        <button class="btn block" id="share" data-link="${esc(link)}">Partager l'invitation</button>
+      </div>
+      <h2>Calendrier</h2>
+      <div class="card">
+        <p class="muted small" style="margin-top:0">Abonne ton calendrier à toute la tribu : les rendez-vous et éléments datés de tous les enfants s'y affichent et se mettent à jour tout seuls. Chaque enfant a aussi son propre calendrier depuis sa fiche.</p>
+        <button class="btn block" data-cal="all">📆 Synchroniser toute la famille</button>
+        ${state.me && state.me.role === "owner" ? `<button class="link small" id="cal-reset">Désactiver les anciens liens et en créer de nouveaux</button>` : ""}
+      </div>
+      <h2>Membres</h2>
+      <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
+      ${!standalone ? `<div class="install"><strong>Installer Tribu sur ton téléphone</strong><p class="muted small" style="margin:4px 0 0">${isIOS ? "Dans Safari, appuie sur Partager puis Sur l'écran d'accueil." : "Dans le menu du navigateur, choisis Installer l'application."}</p>${state.installPrompt ? `<button class="btn" style="margin-top:10px" id="install">Installer</button>` : ""}</div>` : ""}
+      <h2>Compte</h2>
+      <p class="muted small">${esc(state.session.user.email)}</p>
+      <button class="btn ghost block" id="logout">Se déconnecter</button>
+      <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>`;
+  }
+
+  // ---------- Calendrier ----------
+  function calSheet(childId) {
+    const child = childId !== "all" ? childById(childId) : null;
+    const https = `${window.TRIBU_CONFIG.supabaseUrl}/functions/v1/calendar?token=${state.household.calendar_token}${child ? "&child=" + child.id : ""}`;
+    const webcal = https.replace(/^https:/, "webcal:");
+    const google = "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal);
+    openSheet(`
+      <h2 style="margin-top:0">Calendrier ${child ? "de " + esc(child.first_name) : "de la famille"}</h2>
+      <p class="muted">Les rendez-vous, tâches, soins et notes datés ${child ? "de " + esc(child.first_name) : "de toute la tribu"} apparaîtront dans ton calendrier, avec un rappel 1 h avant chaque rendez-vous.</p>
+      <a class="btn block" href="${esc(webcal)}">Ajouter au calendrier de l'iPhone</a>
+      <a class="btn block" style="margin-top:10px" href="${esc(google)}" target="_blank" rel="noopener">Ajouter à Google Agenda (Android)</a>
+      <button class="btn ghost block" style="margin-top:10px" id="cal-copy">Copier le lien</button>
+      <p class="muted small" style="margin-top:14px">Les mises à jour arrivent automatiquement : en moins d'une heure sur iPhone, parfois quelques heures sur Google Agenda. Ce lien est personnel à ta tribu, ne le publie pas.</p>`, (el) => {
+      el.querySelector("#cal-copy").onclick = async () => { await navigator.clipboard.writeText(https); toast("Lien copié"); };
+    });
+  }
+
+  // ---------- Forms ----------
+  function childForm(child) {
+    const c = child || { first_name: "", birth_date: "", color: COLORS[state.children.length % COLORS.length], emoji: EMOJIS[state.children.length % EMOJIS.length] };
+    let color = c.color, emoji = c.emoji;
+    openSheet(`
+      <h2 style="margin-top:0">${child ? "Modifier " + esc(child.first_name) : "Ajouter un enfant"}</h2>
+      <form id="cf">
+        <label for="cf-name">Prénom</label>
+        <input id="cf-name" required maxlength="40" value="${esc(c.first_name)}">
+        <label>Photo</label>
+        <div style="display:flex;align-items:center;gap:14px">
+          <div id="cf-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:${esc(c.color)};display:grid;place-items:center;font-size:2rem;flex:0 0 auto">${child ? avatar(child) : esc(c.emoji)}</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-start">
+            <label class="btn ghost" style="margin:0;font-size:.95rem" for="cf-file">${child && child.photo_path ? "Changer la photo" : "Choisir une photo"}</label>
+            <input id="cf-file" type="file" accept="image/*" hidden>
+            <button type="button" class="link small" id="cf-rmphoto" ${child && child.photo_path ? "" : "hidden"}>Retirer la photo</button>
+          </div>
+        </div>
+        <label for="cf-birth">Date de naissance</label>
+        <input id="cf-birth" type="date" value="${esc(c.birth_date || "")}">
+        <label>Couleur</label>
+        <div class="swatches" id="cf-colors">${COLORS.map((x) => `<button type="button" style="--c:${x}" data-v="${x}" aria-label="Couleur ${x}" aria-pressed="${x === color}"></button>`).join("")}</div>
+        <label>Avatar</label>
+        <div class="seg" id="cf-emojis">${EMOJIS.map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
+        <div class="actions">
+          ${child ? `<button type="button" class="btn danger" id="cf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="cf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">${child ? "Enregistrer" : "Ajouter"}</button>
+        </div>
+      </form>`, (el) => {
+      const pick = (wrap, cb) => wrap.addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        wrap.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        cb(b.dataset.v);
+      });
+      let photoBlob = null, removePhoto = false;
+      const preview = el.querySelector("#cf-preview");
+      el.querySelector("#cf-file").onchange = async (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        try {
+          photoBlob = await resizePhoto(f); removePhoto = false;
+          preview.innerHTML = `<img src="${URL.createObjectURL(photoBlob)}" alt="">`;
+          el.querySelector("#cf-rmphoto").hidden = false;
+        } catch (_) { toast("Format de photo non pris en charge. Essaie une autre image."); }
+      };
+      el.querySelector("#cf-rmphoto").onclick = () => {
+        photoBlob = null; removePhoto = true; preview.textContent = emoji;
+        el.querySelector("#cf-rmphoto").hidden = true;
+      };
+      pick(el.querySelector("#cf-colors"), (v) => { color = v; preview.style.background = v; });
+      pick(el.querySelector("#cf-emojis"), (v) => { emoji = v; if (!preview.querySelector("img")) preview.textContent = v; });
+      const cancel = el.querySelector("#cf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#cf-del");
+      if (del) del.onclick = async () => {
+        if (!confirm(`Supprimer ${child.first_name} et tous ses éléments ?`)) return;
+        if (child.photo_path) await sb.storage.from("child-photos").remove([child.photo_path]);
+        await sb.from("children").delete().eq("id", child.id);
+        closeSheet(); await loadAll(); location.hash = "#/enfants"; render(); toast("Enfant supprimé");
+      };
+      el.querySelector("#cf").onsubmit = async (e) => {
+        e.preventDefault();
+        const row = { first_name: el.querySelector("#cf-name").value.trim(), birth_date: el.querySelector("#cf-birth").value || null, color, emoji };
+        if (!row.first_name) return;
+        const btn = el.querySelector("#cf button[type=submit]"); btn.disabled = true;
+        const q = child
+          ? sb.from("children").update(row).eq("id", child.id).select().single()
+          : sb.from("children").insert({ ...row, household_id: state.household.id }).select().single();
+        const { data: saved, error } = await q;
+        if (error) { btn.disabled = false; return toast(errMsg(error)); }
+        const oldPath = child && child.photo_path;
+        if (photoBlob) {
+          const path = `${state.household.id}/${saved.id}/${Date.now()}.jpg`;
+          const up = await sb.storage.from("child-photos").upload(path, photoBlob, { contentType: "image/jpeg" });
+          if (up.error) toast("La photo n'a pas pu être envoyée. Réessaie.");
+          else {
+            await sb.from("children").update({ photo_path: path }).eq("id", saved.id);
+            if (oldPath) await sb.storage.from("child-photos").remove([oldPath]);
+          }
+        } else if (removePhoto && oldPath) {
+          await sb.from("children").update({ photo_path: null }).eq("id", saved.id);
+          await sb.storage.from("child-photos").remove([oldPath]);
+        }
+        closeSheet(); await loadAll(); render(); toast(child ? "Modifications enregistrées" : row.first_name + " ajouté(e)");
+      };
+    });
+  }
+
+  function itemForm(item, preset = {}) {
+    const it = item || { type: preset.type || "rdv", title: "", details: "", child_id: preset.child_id ?? (state.filter !== "all" ? state.filter : null), due_at: null };
+    let type = it.type;
+    const placeholders = { rdv: "Ex : Pédiatre", tache: "Ex : Signer le carnet", sante: "Ex : Vaccin ROR, 2e dose", note: "Ex : Allergique aux kiwis", taille: "Ex : Chaussures 28" };
+    openSheet(`
+      <h2 style="margin-top:0">${item ? "Modifier" : "Ajouter"}</h2>
+      <form id="itf">
+        <div class="seg" id="itf-type" role="group" aria-label="Type">${Object.entries(TYPES).map(([k, t]) => `<button type="button" data-v="${k}" aria-pressed="${k === type}">${t.ico} ${t.label}</button>`).join("")}</div>
+        <label for="itf-title">Intitulé</label>
+        <input id="itf-title" required maxlength="200" value="${esc(it.title)}" placeholder="${placeholders[type]}">
+        <label for="itf-child">Pour qui</label>
+        <select id="itf-child"><option value="">Toute la famille</option>${state.children.map((c) => `<option value="${c.id}" ${c.id === it.child_id ? "selected" : ""}>${esc(c.emoji)} ${esc(c.first_name)}</option>`).join("")}</select>
+        <div id="itf-date-wrap">
+          <label for="itf-date">Date et heure <span class="muted" id="itf-opt">(facultatif)</span></label>
+          <input id="itf-date" type="datetime-local" value="${toLocalInput(it.due_at)}">
+        </div>
+        <label for="itf-details">Détails</label>
+        <textarea id="itf-details" maxlength="2000" placeholder="Adresse, documents à apporter, posologie...">${esc(it.details || "")}</textarea>
+        <div class="actions">
+          ${item ? `<button type="button" class="btn danger" id="itf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="itf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">${item ? "Enregistrer" : "Ajouter"}</button>
+        </div>
+      </form>`, (el) => {
+      const dateWrap = el.querySelector("#itf-date-wrap");
+      const sync = () => {
+        el.querySelector("#itf-title").placeholder = placeholders[type];
+        dateWrap.hidden = type === "taille";
+        el.querySelector("#itf-opt").textContent = type === "rdv" ? "" : "(facultatif)";
+        el.querySelector("#itf-date").required = type === "rdv";
+      };
+      sync();
+      el.querySelector("#itf-type").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        type = b.dataset.v;
+        el.querySelectorAll("#itf-type button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        sync();
+      });
+      const cancel = el.querySelector("#itf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#itf-del");
+      if (del) del.onclick = async () => {
+        await sb.from("items").delete().eq("id", item.id);
+        closeSheet(); await loadAll(); render(); toast("Élément supprimé");
+      };
+      el.querySelector("#itf").onsubmit = async (e) => {
+        e.preventDefault();
+        const dv = el.querySelector("#itf-date").value;
+        const row = {
+          type,
+          title: el.querySelector("#itf-title").value.trim(),
+          child_id: el.querySelector("#itf-child").value || null,
+          details: el.querySelector("#itf-details").value.trim() || null,
+          due_at: (type === "taille" || !dv) ? null : new Date(dv).toISOString()
+        };
+        if (!row.title) return;
+        const q = item
+          ? sb.from("items").update(row).eq("id", item.id)
+          : sb.from("items").insert({ ...row, household_id: state.household.id, created_by: state.session.user.id });
+        const { error } = await q;
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(item ? "Modifications enregistrées" : TYPES[type].label + " ajouté(e)");
+      };
+    });
+  }
+
+  // ---------- Events ----------
+  function bindCommon() {
+    $app.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { state.filter = b.dataset.filter; render(); });
+    ["add-child", "add-child-empty"].forEach((id) => { const b = document.getElementById(id); if (b) b.onclick = () => childForm(); });
+    const fab = document.getElementById("fab");
+    if (fab) fab.onclick = () => {
+      const [page, id] = route();
+      if (!state.children.length && page !== "enfant") { toast("Ajoute d'abord un enfant, ou choisis Toute la famille"); }
+      itemForm(null, page === "enfant" ? { child_id: id } : {});
+    };
+    $app.querySelectorAll("[data-edit]").forEach((n) => {
+      const open = () => itemForm(state.items.find((i) => i.id === n.dataset.edit));
+      n.onclick = open;
+      n.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+    });
+    $app.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = async () => {
+      const it = state.items.find((i) => i.id === b.dataset.toggle);
+      it.done = !it.done; render();
+      await sb.from("items").update({ done: it.done }).eq("id", it.id);
+    });
+    const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-cal]").forEach((b) => b.onclick = () => calSheet(b.dataset.cal));
+    const cr = document.getElementById("cal-reset");
+    if (cr) cr.onclick = async () => {
+      if (!confirm("Les calendriers déjà abonnés ne se mettront plus à jour. Chaque membre devra s'abonner à nouveau. Continuer ?")) return;
+      const { data, error } = await sb.from("households").update({ calendar_token: crypto.randomUUID() }).eq("id", state.household.id).select().single();
+      if (error) return toast(errMsg(error));
+      state.household = data; render(); toast("Nouveaux liens créés");
+    };
+    const afc = document.getElementById("add-for-child"); if (afc) afc.onclick = () => itemForm(null, { child_id: afc.dataset.id });
+
+    // Shopping
+    const sa = document.getElementById("shop-add");
+    if (sa) sa.onsubmit = async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("shop-name").value.trim();
+      if (!name) return;
+      const category = document.getElementById("shop-cat").value;
+      document.getElementById("shop-name").value = "";
+      const { error } = await sb.from("shopping_items").insert({ household_id: state.household.id, name, category });
+      if (error) return toast(errMsg(error));
+      await loadAll(); render();
+      const inp = document.getElementById("shop-name"); if (inp) { inp.focus(); document.getElementById("shop-cat").value = category; }
+    };
+    $app.querySelectorAll("[data-shop]").forEach((b) => b.onclick = async () => {
+      const s = state.shopping.find((x) => x.id === b.dataset.shop);
+      s.checked = !s.checked; render();
+      await sb.from("shopping_items").update({ checked: s.checked }).eq("id", s.id);
+    });
+    $app.querySelectorAll("[data-shop-del]").forEach((b) => b.onclick = async () => {
+      state.shopping = state.shopping.filter((x) => x.id !== b.dataset.shopDel); render();
+      await sb.from("shopping_items").delete().eq("id", b.dataset.shopDel);
+    });
+    const sc = document.getElementById("shop-clear");
+    if (sc) sc.onclick = async () => {
+      const ids = state.shopping.filter((s) => s.checked).map((s) => s.id);
+      state.shopping = state.shopping.filter((s) => !s.checked); render();
+      await sb.from("shopping_items").delete().in("id", ids);
+      toast("Panier vidé");
+    };
+
+    // Settings
+    const share = document.getElementById("share");
+    if (share) share.onclick = async () => {
+      const text = `Rejoins notre tribu sur Tribu avec le code ${state.household.invite_code} : ${share.dataset.link}`;
+      if (navigator.share) { try { await navigator.share({ title: "Rejoins notre tribu", text }); } catch (_) {} }
+      else { await navigator.clipboard.writeText(text); toast("Invitation copiée"); }
+    };
+    const inst = document.getElementById("install");
+    if (inst) inst.onclick = async () => { state.installPrompt.prompt(); state.installPrompt = null; render(); };
+    const lo = document.getElementById("logout"); if (lo) lo.onclick = () => sb.auth.signOut();
+    const lv = document.getElementById("leave");
+    if (lv) lv.onclick = async () => {
+      if (!confirm("Quitter cette tribu ? Tu n'auras plus accès à ses données.")) return;
+      await sb.from("members").delete().eq("household_id", state.household.id).eq("user_id", state.session.user.id);
+      if (state.channel) sb.removeChannel(state.channel);
+      state.household = null; render();
+    };
+  }
+
+  // ---------- Boot ----------
+  window.addEventListener("hashchange", () => { closeSheet(); render(); window.scrollTo(0, 0); });
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; });
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+  let booted = false;
+  sb.auth.onAuthStateChange(async (event, session) => {
+    const prev = state.session && state.session.user.id;
+    state.session = session;
+    if (event === "PASSWORD_RECOVERY") {
+      const pwd = prompt("Choisis un nouveau mot de passe (6 caractères minimum)");
+      if (pwd) { const { error } = await sb.auth.updateUser({ password: pwd }); toast(error ? errMsg(error) : "Mot de passe modifié"); }
+    }
+    if (!session) {
+      if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], members: [] });
+      return render();
+    }
+    if (!booted || prev !== session.user.id) {
+      booted = true;
+      $app.innerHTML = `<div class="hero"><p class="muted">Chargement de ta tribu...</p></div>`;
+      setTimeout(async () => { await loadHousehold(); render(); }, 0);
+    }
+  });
+})();

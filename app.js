@@ -564,7 +564,8 @@
       ${state.memberships.length > 1 ? `<h2>Mes tribus</h2><div class="card">${state.memberships.map((m) => `<div class="member"><span>${esc(m.households ? m.households.name : "Tribu")}</span>${m.household_id === state.household.id ? `<span class="muted small">Actuelle</span>` : `<button class="link small" style="padding:0" data-switch="${m.household_id}">Ouvrir</button>`}</div>`).join("")}</div>` : ""}
       <h2>Compte</h2>
       <p class="muted small">${esc(state.session.user.email)}</p>
-      <button class="btn ghost block" id="logout">Se déconnecter</button>
+      <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
+      <button class="btn ghost block" style="margin-top:10px" id="logout">Se déconnecter</button>
       <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>`;
   }
 
@@ -1125,6 +1126,28 @@
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
     const ib = document.getElementById("install-dismiss");
     if (ib) ib.onclick = () => { ls.set("tribu_install_hidden", "1"); render(); };
+    const cpw = document.getElementById("change-pwd");
+    if (cpw) cpw.onclick = () => openSheet(`
+      <h2 style="margin-top:0">Nouveau mot de passe</h2>
+      <form id="pw">
+        <input type="email" autocomplete="username" value="${esc(state.session.user.email)}" hidden>
+        <label for="pw1">Nouveau mot de passe</label>
+        <input id="pw1" type="password" autocomplete="new-password" minlength="6" required>
+        <label for="pw2">Confirme-le</label>
+        <input id="pw2" type="password" autocomplete="new-password" minlength="6" required>
+        <div id="pw-err" class="error" hidden></div>
+        <div class="actions"><button type="button" class="btn ghost" id="pw-cancel">Annuler</button><button class="btn" type="submit">Enregistrer</button></div>
+      </form>`, (el) => {
+      el.querySelector("#pw-cancel").onclick = closeSheet;
+      el.querySelector("#pw").onsubmit = async (e) => {
+        e.preventDefault();
+        const a = el.querySelector("#pw1").value, b = el.querySelector("#pw2").value, err = el.querySelector("#pw-err");
+        if (a !== b) { err.hidden = false; err.textContent = "Les deux mots de passe ne sont pas identiques."; return; }
+        const { error } = await sb.auth.updateUser({ password: a });
+        if (error) { err.hidden = false; err.textContent = errMsg(error); return; }
+        closeSheet(); toast("Mot de passe modifié");
+      };
+    });
     const lo = document.getElementById("logout"); if (lo) lo.onclick = () => sb.auth.signOut();
     $app.querySelectorAll("[data-switch]").forEach((b) => b.onclick = async () => {
       ls.set(HID_KEY, b.dataset.switch); state.filter = "all";

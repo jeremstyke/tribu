@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 38;
+  const TRIBU_VERSION = 39;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -436,7 +436,7 @@
       <div class="hero">
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu <span class="beta">Bêta</span></h1>
-        <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
+        <p class="lead">Rendez-vous, courses, ménage et enfants : toute la maison organisée au même endroit, à jour pour chacun. En famille ou en couple.</p>
         ${invite || ls.get(PRO_LINK_KEY) ? "" : ls.get(WANT_PRO_KEY) ? proPill() : betaPill()}
         <div id="invite-banner"></div>
         ${inApp ? `<div class="invite-banner"><strong>Ouvre Tribu dans ${detectEnv().ios ? "Safari" : "Chrome"}</strong><br>Tu es dans le navigateur de ${/WhatsApp/i.test(navigator.userAgent) ? "WhatsApp" : /Telegram/i.test(navigator.userAgent) ? "Telegram" : "l'application"} : Face ID et l'installation n'y fonctionnent pas. Appuie sur <strong>⋯</strong> ou <strong>⋮</strong>, puis "Ouvrir dans ${detectEnv().ios ? "Safari" : "Chrome"}".<br><button class="btn ghost" style="margin-top:10px" id="copy-app-link">🔗 Copier le lien</button><br><span class="small muted">Sinon, tu peux te connecter ici avec un email et un mot de passe.</span></div>` : ""}
@@ -558,7 +558,7 @@
       <div class="hero">
         <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
         ${!create ? "" : viaPro ? `<span class="beta-pill">🎟️ Invité par ta nounou : ta place est réservée</span>` : betaPill()}
-        <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code. Les familles inscrites pendant la bêta gardent Tribu gratuit à vie." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
+        <p class="lead">${create ? "Crée l'espace de ta famille ou de ton couple, puis invite ton ou ta partenaire avec un code. Les familles inscrites pendant la bêta gardent Tribu gratuit à vie." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
         <form class="card" id="onb">
           <label for="dn">Ton prénom</label>
           <input id="dn" required maxlength="40" autocomplete="given-name" placeholder="Ex : Camille">
@@ -729,7 +729,7 @@
     html += vaccinesHomeHtml();
 
     if (!state.children.length) {
-      html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
+      html += `<div class="empty"><strong>Ajoute les membres de ta tribu</strong><br>Enfants ou adultes, chacun a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici. En couple sans enfant ? Ajoutez-vous tous les deux.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button> <button class="btn ghost" id="add-adult-empty">Ajouter un adulte</button></div>`;
     }
 
     if (overdue.length) html += `<section class="day"><div class="day-title" style="color:var(--danger)">En retard</div>${overdue.map((i) => itemHtml(i, true)).join("")}</section>`;
@@ -863,7 +863,7 @@
         <button class="btn block" data-share-app>💌 Partager Tribu</button>
       </div>
       <div class="card">
-        <h3>Inviter l'autre parent</h3>
+        <h3>Inviter ton ou ta partenaire</h3>
         <p class="muted small">Envoie-lui ce lien : il crée son compte et rejoint directement ${esc(state.household.name)}. Vous verrez tous les deux les mêmes enfants, rendez-vous, photos et courses, en temps réel.</p>
         <button class="btn block" id="share" data-link="${esc(link)}">Envoyer le lien d'invitation</button>
         <p class="muted small" style="margin:14px 0 0">Ou donne-lui ce code, à saisir dans l'app :</p>
@@ -2073,6 +2073,7 @@
   function bindCommon() {
     $app.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { state.filter = b.dataset.filter; render(); });
     ["add-child", "add-child-empty"].forEach((id) => { const b = document.getElementById(id); if (b) b.onclick = () => childForm(); });
+    { const b = document.getElementById("add-adult-empty"); if (b) b.onclick = () => childForm(null, "adulte"); }
     const fab = document.getElementById("fab");
     if (fab) fab.onclick = () => {
       const [page, id] = route();
@@ -2537,7 +2538,7 @@
     $app.innerHTML = `<div class="hero">
       <h1>Bienvenue 👋</h1>
       <p class="lead">Tu utilises Tribu en tant que :</p>
-      <button class="role-card" data-role="famille"><span class="rc-ico" aria-hidden="true">👪</span><span><strong>Parent</strong><br><span class="muted small">J'organise la vie de ma famille : enfants, rendez-vous, courses.</span></span></button>
+      <button class="role-card" data-role="famille"><span class="rc-ico" aria-hidden="true">👪</span><span><strong>Famille ou couple</strong><br><span class="muted small">J'organise la vie de la maison : rendez-vous, courses, ménage, enfants.</span></span></button>
       <button class="role-card" data-role="pro"><span class="rc-ico" aria-hidden="true">👩‍🍼</span><span><strong>Assistante maternelle, nounou ou micro-crèche</strong><br><span class="muted small">Je suis la journée des enfants qu'on me confie.</span></span></button>
       <p class="muted small" style="margin-top:14px">Tu es les deux ? Commence par l'un, tu pourras ajouter l'autre ensuite avec le même compte.</p>
       <button class="link small muted" id="logout">Se déconnecter</button></div>`;
@@ -2563,7 +2564,7 @@
         <div id="err" class="error" hidden></div>
         <button class="btn block" style="margin-top:18px" type="submit">Créer mon espace pro</button>
       </form>`}
-      ${state.hasFamily || state.household ? `<button class="link" id="pro-back">‹ Revenir à mon espace famille</button>` : `<button class="link" id="pro-back">Je suis un parent</button>`}
+      ${state.hasFamily || state.household ? `<button class="link" id="pro-back">‹ Revenir à mon espace famille</button>` : `<button class="link" id="pro-back">Je suis une famille ou un couple</button>`}
       <button class="link small muted" id="logout">Se déconnecter</button></div>`;
     if (full) bindWaitlist("pro");
     document.getElementById("logout").onclick = () => sb.auth.signOut();

@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 20;
+  const TRIBU_VERSION = 21;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -65,6 +65,7 @@
     if (/already registered/i.test(m)) return "Un compte existe déjà avec cet email. Connecte-toi.";
     if (/Password should be/i.test(m)) return "Le mot de passe doit faire au moins 6 caractères.";
     if (/quota photos/i.test(m)) return "L'album de ta tribu est plein (100 photos). Supprime des photos pour en ajouter.";
+    if (/beta_full/i.test(m)) return "La bêta est complète : les 100 places sont prises. Rejoins une tribu existante avec un code d'invitation.";
     if (/code invalide/i.test(m)) return "Ce code ne correspond à aucune tribu. Vérifie-le.";
     return m || "Une erreur est survenue. Réessaie.";
   };
@@ -243,6 +244,7 @@
       <div class="hero desktop-gate">
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu <span class="beta">Bêta</span></h1>
+        ${betaPill()}
         <p class="lead">Tribu s'utilise uniquement sur <strong>téléphone</strong>. Scanne ce code avec l'appareil photo de ton iPhone ou de ton Android :</p>
         <div class="qr-card"><img src="icons/qr.svg" width="220" height="220" alt="QR code vers jeremstyke.github.io/tribu"></div>
         <p class="muted small">ou envoie-toi le lien :</p>
@@ -254,6 +256,7 @@
         </div>
         <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a></p>
       </div>`;
+    refreshBetaPill();
     document.getElementById("copy-link").onclick = async () => {
       try { await navigator.clipboard.writeText(url); toast("Lien copié"); } catch (_) { toast(url, 5000); }
     };
@@ -391,6 +394,7 @@
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu <span class="beta">Bêta</span></h1>
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
+        ${invite ? "" : betaPill()}
         <div id="invite-banner"></div>
         ${card}
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
@@ -403,6 +407,7 @@
     const go = (id, m) => { const b = document.getElementById(id); if (b) b.onclick = () => renderAuth(m); };
     go("go-signup", "signup"); go("go-pwd", "login-pwd"); go("go-signup-pwd", "signup-pwd"); go("go-home", pk ? "home" : "login-pwd"); go("go-home2", "home");
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
+    if (!invite) refreshBetaPill();
     if (invite) invitePreview(invite).then((pv) => {
       const b = document.getElementById("invite-banner"); if (!b || !pv) return;
       b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>Crée ton compte (ou connecte-toi) pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
@@ -450,12 +455,55 @@
     }
   }
 
+  // ---------- Bêta limitée à 100 familles ----------
+  const BETA_LIMIT = 100;
+  async function betaSpots() {
+    try { const { data } = await sb.rpc("beta_spots"); if (data) state.beta = data; } catch (_) {}
+    return state.beta;
+  }
+  const betaPill = () => {
+    const b = state.beta;
+    if (!b) return `<span id="beta-pill" class="beta-pill">🎟️ Bêta ouverte à ${BETA_LIMIT} familles</span>`;
+    return `<span id="beta-pill" class="beta-pill ${b.left ? "" : "full"}">🎟️ Bêta ouverte à ${BETA_LIMIT} familles · ${b.left ? `encore <strong>${b.left}</strong> place${b.left > 1 ? "s" : ""}` : "<strong>complet</strong>"}</span>`;
+  };
+  const refreshBetaPill = () => betaSpots().then(() => { const el = document.getElementById("beta-pill"); if (el) el.outerHTML = betaPill(); });
+  function waitlistHtml(email) {
+    return `<div class="card" id="wl">
+      <h3>La bêta est complète</h3>
+      <p class="muted small" style="margin:4px 0 0">Les ${BETA_LIMIT} places de la bêta sont prises. Laisse ton email : tu seras prévenu dès l'ouverture de nouvelles places. Si quelqu'un t'a invité, utilise plutôt son code.</p>
+      <label for="wl-email">Email</label>
+      <input id="wl-email" type="email" autocomplete="email" value="${esc(email || "")}">
+      <button class="btn block" style="margin-top:14px" id="wl-go">Me prévenir</button>
+    </div>`;
+  }
+  function bindWaitlist() {
+    const b = document.getElementById("wl-go"); if (!b) return;
+    b.onclick = async () => {
+      const email = document.getElementById("wl-email").value.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return toast("Cette adresse email n'est pas valide.");
+      b.disabled = true;
+      const { error } = await sb.rpc("join_waitlist", { p_email: email });
+      if (error) { b.disabled = false; return toast("Inscription impossible. Réessaie."); }
+      document.getElementById("wl").innerHTML = `<h3>C'est noté ✓</h3><p class="muted small" style="margin:4px 0 0">Tu seras prévenu à ${esc(email)} dès qu'une place se libère.</p>`;
+    };
+  }
+
   // ---------- Onboarding ----------
   function renderOnboarding(mode = "create") {
     const create = mode === "create";
+    if (create && !state.beta && !state.betaTried) { state.betaTried = true; betaSpots().then((b) => { if (b && !b.left) renderOnboarding(mode); else refreshBetaPill(); }); }
+    if (create && state.beta && state.beta.left <= 0) {
+      $app.innerHTML = `<div class="hero"><h1>Ta tribu</h1>${betaPill()}${waitlistHtml(state.session && state.session.user.email)}
+        <button class="link" id="switch">J'ai un code d'invitation</button><button class="link small muted" id="logout">Se déconnecter</button></div>`;
+      bindWaitlist();
+      document.getElementById("switch").onclick = () => renderOnboarding("join");
+      document.getElementById("logout").onclick = () => sb.auth.signOut();
+      return;
+    }
     $app.innerHTML = `
       <div class="hero">
         <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
+        ${create ? betaPill() : ""}
         <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
         <form class="card" id="onb">
           <label for="dn">Ton prénom</label>
@@ -725,7 +773,7 @@
     return `<header class="top"><h1>Tribu</h1><span class="beta">Bêta</span></header>
       <div class="beta-card">
         <strong>Tribu est en version bêta</strong>
-        <p class="small" style="margin:4px 0 10px">L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
+        <p class="small" style="margin:4px 0 10px">Ouverte à ${BETA_LIMIT} familles pour l'instant. L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
       </div>
@@ -2097,6 +2145,7 @@
     }).catch(() => {});
   }
 
+  betaSpots();
   let booted = false;
   sb.auth.onAuthStateChange(async (event, session) => {
     const prev = state.session && state.session.user.id;

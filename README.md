@@ -31,7 +31,7 @@ Tribu s'utilise uniquement sur téléphone (iPhone ou Android), en l'installant 
 
 ## Bêta
 
-Tribu évolue chaque semaine. Un bug, une idée ? Bouton "Signaler un bug ou une idée" dans l'app, ou [juryjeremy@gmail.com](mailto:juryjeremy@gmail.com).
+Bêta ouverte à 100 familles pour l'instant. Tribu évolue chaque semaine. Un bug, une idée ? Bouton "Signaler un bug ou une idée" dans l'app, ou [juryjeremy@gmail.com](mailto:juryjeremy@gmail.com).
 
 ---
 

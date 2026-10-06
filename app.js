@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 35;
+  const TRIBU_VERSION = 36;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -301,8 +301,9 @@
     else if (page === "vaccins") body = viewVaccines(id);
     else if (page === "courses") body = viewShopping();
     else if (page === "reglages") body = viewSettings();
+    else if (page === "nouveautes") body = viewNews();
     else body = viewHome();
-    const active = page === "enfant" || page === "vaccins" ? "enfants" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
+    const active = page === "enfant" || page === "vaccins" ? "enfants" : page === "nouveautes" ? "reglages" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
     const showFab = active === "accueil" || page === "enfant";
     const st = mainScroll();
     $app.innerHTML = `
@@ -324,7 +325,7 @@
     if (m) m.scrollTop = set;
   }
   const navLink = (key, ico, label, active) =>
-    `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${label}</a></li>`;
+    `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${key === "reglages" && hasNews() ? `<span class="dot nav-dot" aria-label="Nouveautés"></span>` : ""}${label}</a></li>`;
 
   // ---------- Auth (Face ID / empreinte, ou mot de passe) ----------
   const PK = window.SimpleWebAuthnBrowser;
@@ -625,6 +626,7 @@
   }
 
   async function afterLogin() {
+    loadNews().then(() => { if (state.household || state.mode === "pro") render(); });
     await loadProProfile();
     state.mode = "famille";
     if (state.pro) {
@@ -846,6 +848,7 @@
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
         <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pour les parents</a>
       </div>
+      ${newsCardHtml()}
       <div class="card">
         <h3>Faire découvrir Tribu</h3>
         <p class="muted small" style="margin-top:2px">Envoie Tribu à d'autres parents : amis, famille, parents de l'école. Ils créeront leur propre tribu, séparée de la tienne.</p>
@@ -2126,6 +2129,7 @@
     $app.querySelectorAll("[data-pres-leave]").forEach((b) => b.onclick = () => { b.disabled = true; presLeave(b.dataset.presLeave); });
     $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
     $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
+    bindNews();
     $app.querySelectorAll("[data-share-app]").forEach((b) => b.onclick = () => shareApp(b.dataset.shareApp === "pro"));
     $app.querySelectorAll("[data-share-add]").forEach((b) => b.onclick = () => shareSheet(b.dataset.shareAdd));
     $app.querySelectorAll("[data-share-del]").forEach((b) => b.onclick = async () => {
@@ -2464,6 +2468,7 @@
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu Pro : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " pro · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html#pro">❓ Questions fréquentes</a>
       </div>
+      ${newsCardHtml()}
       <div class="card">
         <h3>${esc(state.pro.display_name)}</h3>
         <p class="muted small" style="margin:2px 0 10px">${esc(PRO_KINDS[state.pro.kind] || "")}</p>
@@ -2494,8 +2499,9 @@
     if (page === "enfant") body = viewProChild(id);
     else if (page === "heures") body = viewProHours(id);
     else if (page === "reglages") body = viewProSettings();
+    else if (page === "nouveautes") body = viewNews();
     else body = viewProHome();
-    const active = page === "heures" || page === "reglages" ? page : "accueil";
+    const active = page === "nouveautes" ? "reglages" : page === "heures" || page === "reglages" ? page : "accueil";
     const st = mainScroll();
     $app.innerHTML = `<main class="wrap">${body}</main>
       <nav class="nav" aria-label="Navigation"><ul>
@@ -2812,6 +2818,106 @@
       }
       pdf.p("Fiche établie à partir des informations saisies par la famille dans Tribu. Elle ne remplace pas le carnet de santé.", { muted: true, size: 9 });
       await pdf.share(`fiche-sante-${slug(c.first_name)}.pdf`);
+    });
+  }
+
+  // ---------- Nouveautés et boîte à idées ----------
+  const NEWS_SEEN_KEY = "tribu_news_seen";
+  const IDEA_STATUS = { nouvelle: ["", ""], prevue: ["🛠️ Prévue", "st-prevue"], faite: ["✅ Faite", "st-faite"], refusee: ["Pas retenue", "st-refusee"] };
+  async function loadNews() {
+    try {
+      const [{ data: news }, { data: adm }] = await Promise.all([
+        sb.from("announcements").select("*").order("created_at", { ascending: false }).limit(30),
+        sb.rpc("is_admin")
+      ]);
+      state.news = news || []; state.isAdmin = !!adm;
+    } catch (_) { state.news = state.news || []; }
+  }
+  const hasNews = () => (state.news || []).length && (!ls.get(NEWS_SEEN_KEY) || state.news[0].created_at > ls.get(NEWS_SEEN_KEY));
+  async function loadIdeas() {
+    const { data } = await sb.rpc("ideas_list");
+    state.ideas = data || [];
+  }
+  function newsCardHtml() {
+    return `<div class="card news-entry" data-go="#/nouveautes" role="button" tabindex="0">
+      <span class="rc-ico" aria-hidden="true">🆕</span>
+      <span><strong>Nouveautés et idées</strong>${hasNews() ? ` <span class="dot" aria-label="Nouveau"></span>` : ""}<br><span class="muted small">Ce qui change dans Tribu, et ta boîte à idées</span></span>
+      <span class="pk-go" aria-hidden="true">›</span></div>`;
+  }
+  function viewNews() {
+    if (state.news && state.news[0]) ls.set(NEWS_SEEN_KEY, state.news[0].created_at);
+    if (!state.ideasLoaded) { state.ideasLoaded = true; loadIdeas().then(() => { if (route()[0] === "nouveautes") render(); }); }
+    const day = (iso) => new Date(iso).toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
+    const ideas = state.ideas || [];
+    return `<button class="back" onclick="location.hash='#/reglages'">‹ ${state.mode === "pro" ? "Réglages" : "Tribu"}</button>
+      <header class="top"><h1>Nouveautés</h1></header>
+      ${state.isAdmin ? `<button class="btn ghost block" id="news-add" style="margin-bottom:14px">✏️ Publier une nouveauté</button>` : ""}
+      ${(state.news || []).map((n) => `<div class="card news">
+        <div class="news-head"><span class="news-emo" aria-hidden="true">${esc(n.emoji)}</span><div><strong>${esc(n.title)}</strong><div class="muted small">${day(n.created_at)}</div></div>
+        ${state.isAdmin ? `<button class="link small" style="padding:0;margin-left:auto" data-news-del="${n.id}">Supprimer</button>` : ""}</div>
+        ${n.body ? `<p class="small" style="margin:8px 0 0;white-space:pre-line">${esc(n.body)}</p>` : ""}</div>`).join("") || `<p class="muted">Rien pour l'instant.</p>`}
+      <h2>💡 Boîte à idées</h2>
+      <p class="muted small" style="margin-top:0">Propose ce qui te manque, et vote pour les idées des autres. Les plus demandées passent en premier.</p>
+      <button class="btn block" id="idea-add">Proposer une idée</button>
+      <div style="margin-top:14px">${!state.ideasLoaded || state.ideas === undefined ? `<p class="muted small">Chargement...</p>` : ideas.map((i) => `<div class="card idea">
+        <button class="vote ${i.voted ? "on" : ""}" data-vote="${i.id}" aria-pressed="${i.voted}" aria-label="Voter pour cette idée"><span aria-hidden="true">👍</span>${i.votes}</button>
+        <div class="idea-body"><p style="margin:0">${esc(i.text)}</p>
+          <div class="muted small" style="margin-top:4px">${i.author_kind === "pro" ? "Une pro" : "Une famille"} · ${day(i.created_at)}${IDEA_STATUS[i.status][0] ? ` · <span class="st ${IDEA_STATUS[i.status][1]}">${IDEA_STATUS[i.status][0]}</span>` : ""}</div>
+          ${state.isAdmin ? `<select class="idea-st" data-idea-st="${i.id}">${Object.keys(IDEA_STATUS).map((k) => `<option value="${k}" ${k === i.status ? "selected" : ""}>${k === "nouvelle" ? "Nouvelle" : IDEA_STATUS[k][0]}</option>`).join("")}</select>` : ""}
+          ${i.mine || state.isAdmin ? `<button class="link small" style="padding:0" data-idea-del="${i.id}">Supprimer</button>` : ""}</div>
+      </div>`).join("") || `<p class="muted small">Aucune idée pour l'instant : sois le premier !</p>`}</div>`;
+  }
+  function bindNews() {
+    const add = document.getElementById("idea-add");
+    if (add) add.onclick = () => openSheet(`<h2 style="margin-top:0">💡 Proposer une idée</h2><form id="if">
+        <label for="if-t">Ton idée</label><textarea id="if-t" maxlength="400" rows="4" required placeholder="Ex : pouvoir noter le poids de bébé et voir sa courbe"></textarea>
+        <p class="muted small">Elle sera visible par les autres utilisateurs, sans ton nom. N'y mets pas d'informations personnelles.</p>
+        <div class="actions"><button type="button" class="btn ghost" id="if-c">Annuler</button><button class="btn" type="submit">Envoyer</button></div></form>`, (el) => {
+      el.querySelector("#if-c").onclick = closeSheet;
+      el.querySelector("#if").onsubmit = async (e) => {
+        e.preventDefault();
+        const text = el.querySelector("#if-t").value.trim();
+        if (text.length < 3) return toast("Écris un peu plus");
+        const { error } = await sb.from("ideas").insert({ user_id: state.session.user.id, text, author_kind: state.mode === "pro" ? "pro" : "famille" });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadIdeas(); render(); toast("Merci pour ton idée !");
+      };
+    });
+    $app.querySelectorAll("[data-vote]").forEach((b) => b.onclick = async () => {
+      const i = state.ideas.find((x) => x.id === b.dataset.vote); if (!i) return;
+      b.disabled = true;
+      const { error } = i.voted
+        ? await sb.from("idea_votes").delete().eq("idea_id", i.id).eq("user_id", state.session.user.id)
+        : await sb.from("idea_votes").insert({ idea_id: i.id, user_id: state.session.user.id });
+      if (error) { b.disabled = false; return toast(errMsg(error)); }
+      await loadIdeas(); render();
+    });
+    $app.querySelectorAll("[data-idea-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm("Supprimer cette idée ?")) return;
+      await sb.from("ideas").delete().eq("id", b.dataset.ideaDel); await loadIdeas(); render();
+    });
+    $app.querySelectorAll("[data-idea-st]").forEach((s) => s.onchange = async () => {
+      const { error } = await sb.from("ideas").update({ status: s.value }).eq("id", s.dataset.ideaSt);
+      if (error) return toast(errMsg(error));
+      await loadIdeas(); render(); toast("Statut mis à jour");
+    });
+    $app.querySelectorAll("[data-news-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm("Supprimer cette nouveauté ?")) return;
+      await sb.from("announcements").delete().eq("id", b.dataset.newsDel); await loadNews(); render();
+    });
+    const na = document.getElementById("news-add");
+    if (na) na.onclick = () => openSheet(`<h2 style="margin-top:0">Publier une nouveauté</h2><form id="nf">
+        <label for="nf-e">Emoji</label><input id="nf-e" maxlength="4" value="🆕" style="width:80px">
+        <label for="nf-t">Titre</label><input id="nf-t" maxlength="120" required>
+        <label for="nf-b">Texte</label><textarea id="nf-b" maxlength="2000" rows="5"></textarea>
+        <div class="actions"><button type="button" class="btn ghost" id="nf-c">Annuler</button><button class="btn" type="submit">Publier</button></div></form>`, (el) => {
+      el.querySelector("#nf-c").onclick = closeSheet;
+      el.querySelector("#nf").onsubmit = async (e) => {
+        e.preventDefault();
+        const { error } = await sb.from("announcements").insert({ emoji: el.querySelector("#nf-e").value.trim() || "🆕", title: el.querySelector("#nf-t").value.trim(), body: el.querySelector("#nf-b").value.trim() });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadNews(); render(); toast("Nouveauté publiée");
+      };
     });
   }
 

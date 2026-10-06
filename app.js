@@ -4,6 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
+  const TRIBU_VERSION = 17;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -359,7 +360,7 @@
     $app.innerHTML = `
       <div class="hero">
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
-        <h1>Tribu</h1>
+        <h1>Tribu <span class="beta">Bêta</span></h1>
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
         <div id="invite-banner"></div>
         ${card}
@@ -555,7 +556,7 @@
     const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
     let html = `
-      <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date">${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
+      <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date"><span class="beta">Bêta</span> ${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
       ${chipsHtml()}
       ${homeBanner()}`;
 
@@ -688,7 +689,12 @@
 
   function viewSettings() {
     const link = location.origin + location.pathname + "?code=" + state.household.invite_code;
-    return `<header class="top"><h1>Tribu</h1></header>
+    return `<header class="top"><h1>Tribu</h1><span class="beta">Bêta</span></header>
+      <div class="beta-card">
+        <strong>Tribu est en version bêta</strong>
+        <p class="small" style="margin:4px 0 10px">L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
+        <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
+      </div>
       <div class="card">
         <h3>Inviter l'autre parent</h3>
         <p class="muted small">Envoie-lui ce lien : il crée son compte et rejoint directement ${esc(state.household.name)}. Vous verrez tous les deux les mêmes enfants, rendez-vous, photos et courses, en temps réel.</p>
@@ -725,7 +731,7 @@
         <button class="btn ghost block" style="margin-top:10px" id="export-data">Exporter mes données</button>
         <button class="btn danger block" style="margin-top:10px" id="delete-account">Supprimer mon compte</button>
       </div>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 16</p>`;
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version ${TRIBU_VERSION} · bêta</p>`;
   }
 
   // ---------- Notifications ----------

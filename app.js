@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 25;
+  const TRIBU_VERSION = 26;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -534,7 +534,7 @@
       <div class="hero">
         <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
         ${!create ? "" : viaPro ? `<span class="beta-pill">🎟️ Invité par ta nounou : ta place est réservée</span>` : betaPill()}
-        <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
+        <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code. Les familles inscrites pendant la bêta gardent Tribu gratuit à vie." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
         <form class="card" id="onb">
           <label for="dn">Ton prénom</label>
           <input id="dn" required maxlength="40" autocomplete="given-name" placeholder="Ex : Camille">
@@ -823,7 +823,7 @@
     return `<header class="top"><h1>Tribu</h1><span class="beta">Bêta</span></header>
       <div class="beta-card">
         <strong>Tribu est en version bêta</strong>
-        <p class="small" style="margin:4px 0 10px">Ouverte à ${BETA_LIMIT} familles pour l'instant. L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
+        <p class="small" style="margin:4px 0 10px">Ouverte à ${BETA_LIMIT} familles. <strong>Ta tribu fait partie des familles fondatrices : Tribu restera gratuit à vie pour vous, options payantes comprises.</strong> L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
         <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pour les parents</a>
@@ -2433,7 +2433,7 @@
     return `<header class="top"><h1>Réglages</h1><span class="beta">Pro</span></header>
       <div class="beta-card">
         <strong>Espace pro en bêta</strong>
-        <p class="small" style="margin:4px 0 10px">Ouvert à ${PRO_LIMIT} professionnels pour l'instant, gratuit pendant la bêta. Dis-moi ce qui te manque au quotidien : c'est toi qui fais évoluer l'outil.</p>
+        <p class="small" style="margin:4px 0 10px">Ouvert à ${PRO_LIMIT} professionnels. <strong>Tu fais partie des pros fondatrices : Tribu Pro restera gratuit à vie pour toi.</strong> Dis-moi ce qui te manque au quotidien : c'est toi qui fais évoluer l'outil.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu Pro : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " pro · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html#pro">❓ Questions fréquentes</a>
       </div>
@@ -2478,7 +2478,7 @@
       <h1>Espace pro</h1>
       ${proPill()}
       ${full ? waitlistHtml(state.session.user.email, true) : `
-      <p class="lead">Pour les assistantes maternelles, nounous et micro-crèches : arrivées et départs, repas, siestes, couches, traitements et cahier de liaison avec les parents. Gratuit pendant la bêta.</p>
+      <p class="lead">Pour les assistantes maternelles, nounous et micro-crèches : arrivées et départs, repas, siestes, couches, traitements et cahier de liaison avec les parents. <strong>Gratuit à vie pour les pros inscrites pendant la bêta.</strong></p>
       <form class="card" id="pro-onb">
         <label for="pn">Ton nom, tel que les parents le connaissent</label>
         <input id="pn" required maxlength="60" autocomplete="name" placeholder="Ex : Nadia, ou Les Petits Loups">

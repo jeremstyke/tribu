@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 33;
+  const TRIBU_VERSION = 34;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -843,6 +843,11 @@
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
         <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pour les parents</a>
+      </div>
+      <div class="card">
+        <h3>Faire découvrir Tribu</h3>
+        <p class="muted small" style="margin-top:2px">Envoie Tribu à d'autres parents : amis, famille, parents de l'école. Ils créeront leur propre tribu, séparée de la tienne.</p>
+        <button class="btn block" data-share-app>💌 Partager Tribu</button>
       </div>
       <div class="card">
         <h3>Inviter l'autre parent</h3>
@@ -2119,6 +2124,7 @@
     $app.querySelectorAll("[data-pres-leave]").forEach((b) => b.onclick = () => { b.disabled = true; presLeave(b.dataset.presLeave); });
     $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
     $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
+    $app.querySelectorAll("[data-share-app]").forEach((b) => b.onclick = () => shareApp(b.dataset.shareApp === "pro"));
     $app.querySelectorAll("[data-share-add]").forEach((b) => b.onclick = () => shareSheet(b.dataset.shareAdd));
     $app.querySelectorAll("[data-share-del]").forEach((b) => b.onclick = async () => {
       if (!confirm(state.mode === "pro" ? "Retirer cet enfant de ton espace ? Tu n'auras plus accès à son suivi." : "Retirer l'accès ? Elle ne verra plus le suivi de ton enfant. Les heures déjà notées restent visibles ici.")) return;
@@ -2468,6 +2474,11 @@
         <p class="muted small" style="margin:14px 0 0">Ou donne-leur ton code pro :</p>
         <div class="code">${esc(state.pro.pro_code)}</div>
       </div>
+      <div class="card">
+        <h3>Faire découvrir Tribu Pro</h3>
+        <p class="muted small" style="margin-top:2px">Tu connais une autre assistante maternelle ou nounou ? Envoie-lui Tribu Pro.</p>
+        <button class="btn ghost block" data-share-app="pro">💌 Partager Tribu Pro</button>
+      </div>
       ${state.children.length ? `<h2>Enfants confiés</h2><div class="card">${state.children.map((c) => `<div class="member"><span>${esc(c.first_name)}<br><span class="muted small">${esc(c.household_name || "")}</span></span><button class="link small" style="padding:0" data-share-del="${c.share_id}">Retirer</button></div>`).join("")}</div>` : ""}
       ${settingsNotifHtml()}
       <h2>Ma famille</h2>
@@ -2563,6 +2574,15 @@
         state.pro = null; closeSheet(); await setMode("famille"); toast("Espace pro fermé");
       };
     });
+  }
+  // Partager l'appli (pas une invitation dans la tribu)
+  async function shareApp(pro) {
+    const url = pro ? "https://jeremstyke.github.io/tribu/pro.html?src=partage-pro" : "https://jeremstyke.github.io/tribu/?src=partage";
+    const text = pro
+      ? "Je t'envoie Tribu Pro, l'appli que j'utilise pour noter la journée des enfants (arrivées, repas, siestes, heures du mois) et échanger avec les parents. Gratuit :"
+      : "Je t'envoie Tribu, l'appli qu'on utilise pour organiser la famille : rendez-vous, vaccins, journal de bébé, activités, courses, partagés entre parents. Gratuit et sans pub :";
+    if (navigator.share) { try { await navigator.share({ title: pro ? "Tribu Pro" : "Tribu", text, url }); } catch (_) {} }
+    else { try { await navigator.clipboard.writeText(text + " " + url); toast("Lien copié"); } catch (_) { toast(url, 5000); } }
   }
   async function proShare() {
     const text = `${state.pro.display_name} t'invite à suivre la journée de ton enfant sur Tribu (repas, siestes, arrivées et départs, petits mots) :`;

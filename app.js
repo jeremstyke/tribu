@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 18;
+  const TRIBU_VERSION = 19;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -232,7 +232,33 @@
   // ---------- Render router ----------
   function route() { return (location.hash || "#/accueil").slice(2).split("/"); }
 
+  // Tribu est faite pour le téléphone : sur ordinateur, on invite à l'ouvrir sur mobile
+  const isDesktop = () => { const e = detectEnv(); return !e.ios && !e.android && window.matchMedia("(pointer: fine)").matches && window.innerWidth >= 820; };
+  function renderDesktop() {
+    const url = "https://jeremstyke.github.io/tribu/";
+    const msg = "Tribu, l'organisation de la famille sur ton téléphone : " + url;
+    $app.innerHTML = `
+      <div class="hero desktop-gate">
+        <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
+        <h1>Tribu <span class="beta">Bêta</span></h1>
+        <p class="lead">Tribu s'utilise uniquement sur <strong>téléphone</strong>. Scanne ce code avec l'appareil photo de ton iPhone ou de ton Android :</p>
+        <div class="qr-card"><img src="icons/qr.svg" width="220" height="220" alt="QR code vers jeremstyke.github.io/tribu"></div>
+        <p class="muted small">ou envoie-toi le lien :</p>
+        <div class="send-row">
+          <a class="btn" href="mailto:?subject=${encodeURIComponent("Tribu sur mon téléphone")}&body=${encodeURIComponent(msg)}">✉️ Par email</a>
+          <a class="btn" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">💬 Par WhatsApp</a>
+          <a class="btn" href="https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent("Tribu, l'organisation de la famille")}" target="_blank" rel="noopener">✈️ Par Telegram</a>
+          <button class="btn ghost" id="copy-link">🔗 Copier le lien</button>
+        </div>
+        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a></p>
+      </div>`;
+    document.getElementById("copy-link").onclick = async () => {
+      try { await navigator.clipboard.writeText(url); toast("Lien copié"); } catch (_) { toast(url, 5000); }
+    };
+  }
+
   function render() {
+    if (isDesktop()) return renderDesktop();
     if (!state.session) return renderAuth();
     if (!state.household) return renderOnboarding();
     const [page, id] = route();
@@ -937,7 +963,8 @@
         ])}`;
     } else {
       body = `${state.installPrompt ? `<button class="btn block" id="install-now">Installer maintenant</button>` : ""}
-        <p>Sur ordinateur, Tribu marche directement dans le navigateur. Pour l'avoir comme une application, avec Chrome ou Edge : clique sur l'icône d'installation à droite de la barre d'adresse, puis sur <strong>Installer</strong>.</p>
+        <p>Tribu s'utilise sur <strong>téléphone</strong>. Scanne ce code avec ton iPhone ou ton Android :</p>
+        <div class="qr-card"><img src="icons/qr.svg" width="200" height="200" alt="QR code vers Tribu"></div>
         <p class="muted small">Sur ton téléphone, ouvre ${esc(location.origin + location.pathname)} et appuie sur "Installer Tribu".</p>`;
     }
     openSheet(`<h2 style="margin-top:0">Installer Tribu</h2>${body}

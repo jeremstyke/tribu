@@ -1,6 +1,6 @@
 // Cache de l'interface pour le hors-ligne. Toujours la dernière version quand le réseau est là.
-const CACHE = "tribu-v18";
-const ASSETS = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "vendor/supabase.js", "vendor/simplewebauthn.min.js", "fonts/figtree.woff2", "fonts/bricolage.woff2"];
+const CACHE = "tribu-v19";
+const ASSETS = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "vendor/supabase.js", "vendor/simplewebauthn.min.js", "fonts/figtree.woff2", "fonts/bricolage.woff2", "icons/qr.svg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((a) => new Request(a, { cache: "reload" })))).then(() => self.skipWaiting()));

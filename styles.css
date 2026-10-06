@@ -305,3 +305,11 @@ h1 .beta { font-size: .9rem; vertical-align: super; margin-left: 4px; }
 .top .beta { align-self: center; }
 .date .beta { font-size: .62rem; padding: 1px 7px; margin-right: 4px; vertical-align: 1px; }
 .beta-card { background: var(--surface); border: 1.5px dashed var(--accent); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 8px; }
+
+/* Écran ordinateur */
+.desktop-gate { max-width: 560px; text-align: center; align-items: center; }
+.desktop-gate .dots { justify-content: center; }
+.qr-card { background: #fff; border-radius: var(--radius-lg); padding: 16px; display: inline-block; margin: 6px auto 14px; box-shadow: 0 6px 24px rgba(31, 45, 77, .15); }
+.qr-card img { display: block; }
+.send-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.send-row .btn { min-height: 42px; padding: 8px 16px; text-decoration: none; }

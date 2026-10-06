@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 27;
+  const TRIBU_VERSION = 28;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -749,7 +749,8 @@
       <div class="child-head"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
         <div><h1>${esc(c.first_name)}</h1><div class="muted">${isAdult(c) ? "Parent" + (c.birth_date ? " · " + age(c.birth_date) : "") : BAND_LABEL[ageBand(c)] + " · " + (age(c.birth_date) || "nouveau-né")}</div></div></div>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="edit-child" data-id="${c.id}">Modifier</button><button class="btn" id="add-for-child" data-id="${c.id}">Ajouter</button></div>
-      <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>`;
+      <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>
+      <button class="btn ghost block" style="margin-top:10px" data-pdf-health="${c.id}">📄 Fiche santé en PDF</button>`;
     const band = ageBand(c);
     if (band === "bebe" || band === "petit") {
       html += `<h2>Noter</h2>${quickGrid(c)}${statsHtml(babyStats(c))}<h2>Journal</h2>${journalHtml(c)}`;
@@ -2114,6 +2115,8 @@
     $app.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
     $app.querySelectorAll("[data-open-pro]").forEach((b) => b.onclick = () => renderProOnboarding());
     const pe = document.getElementById("pro-edit"); if (pe) pe.onclick = proEditSheet;
+    $app.querySelectorAll("[data-pdf-pres]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, key, pid] = b.dataset.pdfPres.split("|"); presencePdf(cid, key, pid || null, b); });
+    $app.querySelectorAll("[data-pdf-health]").forEach((b) => b.onclick = () => healthPdf(b.dataset.pdfHealth, b));
 
     // Shopping
     const sa = document.getElementById("shop-add");
@@ -2425,7 +2428,8 @@
       const t = monthTotal(c.id, key);
       html += `<details class="card hours"><summary><span><strong>${esc(c.first_name)}</strong><br><span class="muted small">${esc(c.household_name || "")}</span></span><span><strong>${dur(t.ms)}</strong><br><span class="muted small">${t.days} jour${t.days > 1 ? "s" : ""}</span></span></summary>
         ${hoursDetail(c.id, key)}
-        <button class="btn ghost block" style="margin-top:10px" data-pres-edit="${c.id}|${key === keys[0] ? ymd(now) : key + "-01"}">Ajouter ou corriger un jour</button></details>`;
+        <button class="btn ghost block" style="margin-top:10px" data-pres-edit="${c.id}|${key === keys[0] ? ymd(now) : key + "-01"}">Ajouter ou corriger un jour</button>
+        ${t.days ? `<button class="btn block" style="margin-top:10px" data-pdf-pres="${c.id}|${key}|">📄 Relevé du mois en PDF</button>` : ""}</details>`;
     });
     return html;
   }
@@ -2564,9 +2568,12 @@
     const c = childById(cid), now = new Date();
     const keys = [0, 1, 2].map((i) => monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)));
     openSheet(`<h2 style="margin-top:0">⏱️ ${esc(c.first_name)} chez ${esc(proNameOf(proId) || "la nounou")}</h2>
-      ${keys.map((k) => { const t = monthTotal(cid, k, proId); return `<details class="hours" ${k === keys[0] ? "open" : ""}><summary><strong>${monthLabel(k)}</strong><span>${t.days} j · ${dur(t.ms)}</span></summary>${hoursDetail(cid, k, proId)}</details>`; }).join("")}
+      ${keys.map((k) => { const t = monthTotal(cid, k, proId); return `<details class="hours" ${k === keys[0] ? "open" : ""}><summary><strong>${monthLabel(k)}</strong><span>${t.days} j · ${dur(t.ms)}</span></summary>${hoursDetail(cid, k, proId)}${t.days ? `<button class="btn ghost block" style="margin:10px 0" data-pdf-pres="${cid}|${k}|${proId}">📄 Relevé en PDF</button>` : ""}</details>`; }).join("")}
       <p class="muted small">Heures notées par ${esc(proNameOf(proId) || "la nounou")}. En cas d'écart, parlez-en ensemble : c'est elle qui peut les corriger.</p>
-      <button class="btn ghost block" id="hs-close">Fermer</button>`, (el) => { el.querySelector("#hs-close").onclick = closeSheet; });
+      <button class="btn ghost block" id="hs-close">Fermer</button>`, (el) => {
+      el.querySelector("#hs-close").onclick = closeSheet;
+      el.querySelectorAll("[data-pdf-pres]").forEach((b) => b.onclick = () => { const [c2, k2, p2] = b.dataset.pdfPres.split("|"); presencePdf(c2, k2, p2 || null, b); });
+    });
   }
   function shareSheet(cid, code = "") {
     const kids = state.children.filter((c) => !isAdult(c));
@@ -2605,6 +2612,152 @@
         ls.set(PRO_LINK_KEY, null);
         closeSheet(); await loadAll(); render(); toast(`C'est fait : ${name} a accès au suivi`);
       };
+    });
+  }
+
+  // ---------- PDF (relevé de présence, fiche santé) ----------
+  // jsPDF n'est chargé qu'au moment d'en avoir besoin
+  function loadJsPdf() {
+    if (window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+    return new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "vendor/jspdf.umd.min.js?v=" + TRIBU_VERSION;
+      s.onload = () => res(window.jspdf.jsPDF); s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+  // Helvetica ne connaît pas les emojis ni certains signes : on nettoie
+  const pdfTxt = (t) => String(t ?? "").replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014]/g, "-").replace(/\u00A0|\u202F/g, " ")
+    .replace(/[^\x20-\x7E\u00A0-\u00FF\u0152\u0153\u20AC]/g, "").replace(/\s{2,}/g, " ").trim();
+  async function pdfDoc(title, subtitle) {
+    const JsPDF = await loadJsPdf();
+    const doc = new JsPDF({ unit: "mm", format: "a4" });
+    const W = 210, M = 16;
+    let y = 20;
+    const page = () => { doc.addPage(); y = 20; };
+    const need = (h) => { if (y + h > 280) page(); };
+    const api = {
+      doc,
+      h1(t) { doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor(31, 45, 77); doc.text(pdfTxt(t), M, y); y += 8; },
+      h2(t) { need(14); y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(12.5); doc.setTextColor(31, 45, 77); doc.text(pdfTxt(t), M, y); y += 2; doc.setDrawColor(242, 165, 65); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); y += 6; },
+      p(t, opts = {}) {
+        doc.setFont("helvetica", opts.bold ? "bold" : "normal"); doc.setFontSize(opts.size || 10.5); doc.setTextColor(...(opts.muted ? [91, 102, 128] : [31, 45, 77]));
+        const lines = doc.splitTextToSize(pdfTxt(t), W - 2 * M);
+        lines.forEach((l) => { need(6); doc.text(l, M, y); y += (opts.size || 10.5) * 0.48; });
+        y += 1.5;
+      },
+      table(cols, rows) {
+        const widths = cols.map((c) => c.w), x0 = M;
+        const head = () => {
+          need(10); doc.setFillColor(238, 241, 246); doc.rect(x0, y - 5, W - 2 * M, 7.5, "F");
+          doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(31, 45, 77);
+          let x = x0 + 2; cols.forEach((c, i) => { doc.text(pdfTxt(c.label), x, y); x += widths[i]; }); y += 6;
+        };
+        head();
+        doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
+        rows.forEach((r) => {
+          const cells = r.map((v, i) => doc.splitTextToSize(pdfTxt(v), widths[i] - 3));
+          const h = Math.max(...cells.map((c) => c.length)) * 4.3 + 2;
+          if (y + h > 280) { page(); head(); doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); }
+          let x = x0 + 2; cells.forEach((c, i) => { doc.text(c, x, y); x += widths[i]; });
+          y += h; doc.setDrawColor(216, 222, 234); doc.setLineWidth(0.2); doc.line(x0, y - 3.2, W - M, y - 3.2);
+        });
+        y += 3;
+      },
+      space(h = 4) { y += h; },
+      signatures(a, b) {
+        need(30); y += 8; doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(31, 45, 77);
+        doc.text(pdfTxt(a), M, y); doc.text(pdfTxt(b), W / 2 + 4, y); y += 18;
+        doc.setDrawColor(91, 102, 128); doc.line(M, y, W / 2 - 8, y); doc.line(W / 2 + 4, y, W - M, y); y += 6;
+      },
+      async share(filename) {
+        const n = doc.getNumberOfPages();
+        for (let i = 1; i <= n; i++) {
+          doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(140, 148, 165);
+          doc.text(pdfTxt(`Tribu · édité le ${new Date().toLocaleDateString("fr-FR")} · page ${i}/${n}`), M, 290);
+        }
+        const blob = doc.output("blob");
+        const file = new File([blob], filename, { type: "application/pdf" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: filename }); } catch (_) {} }
+        else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
+      }
+    };
+    api.h1(title);
+    if (subtitle) api.p(subtitle, { muted: true });
+    return api;
+  }
+  const slug = (s) => pdfTxt(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  async function withBusy(btn, fn) {
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Préparation..."; }
+    try { await fn(); } catch (e) { console.error(e); toast("Le PDF n'a pas pu être créé. Réessaie."); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  }
+
+  // Relevé mensuel de présence (pro et parents)
+  async function presencePdf(cid, key, proId, btn) {
+    await withBusy(btn, async () => {
+      const c = childById(cid);
+      const proName = state.mode === "pro" ? state.pro.display_name : (proNameOf(proId) || "");
+      const family = state.mode === "pro" ? c.household_name : state.household.name;
+      const t = monthTotal(cid, key, proId);
+      const pdf = await pdfDoc(`Relevé de présence · ${monthLabel(key)}`, `${c.first_name}${c.birth_date ? ", né(e) le " + parseYmd(c.birth_date).toLocaleDateString("fr-FR") : ""} · ${family || ""}${proName ? " · Accueil : " + proName : ""}`);
+      pdf.h2("Récapitulatif");
+      pdf.p(`Jours de présence : ${t.days}`, { bold: true });
+      pdf.p(`Total des heures : ${dur(t.ms).replace(" h ", " h ")}`, { bold: true });
+      pdf.h2("Détail jour par jour");
+      const byDay = {};
+      t.list.forEach((p) => { (byDay[p.day] ||= []).push(p); });
+      const rows = Object.keys(byDay).sort().map((d) => {
+        const l = byDay[d];
+        return [parseYmd(d).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }), l.map((p) => fmtTime(p.arrived_at)).join("\n"), l.map((p) => fmtTime(p.left_at)).join("\n"), dur(l.reduce((a, p) => a + (new Date(p.left_at) - new Date(p.arrived_at)), 0))];
+      });
+      if (rows.length) pdf.table([{ label: "Jour", w: 74 }, { label: "Arrivée", w: 34 }, { label: "Départ", w: 34 }, { label: "Durée", w: 36 }], rows);
+      else pdf.p("Aucune présence notée ce mois-ci.", { muted: true });
+      pdf.p("Document indicatif établi à partir des heures d'arrivée et de départ notées dans Tribu. Il ne remplace pas le contrat de travail : heures complémentaires ou majorées, absences et congés sont à vérifier ensemble avant la déclaration Pajemploi.", { muted: true, size: 9 });
+      pdf.signatures("Signature du parent", "Signature de l'assistante maternelle");
+      await pdf.share(`releve-${slug(c.first_name)}-${key}.pdf`);
+    });
+  }
+
+  // Fiche santé de l'enfant (pour le médecin, la crèche, les grands-parents)
+  async function healthPdf(cid, btn) {
+    await withBusy(btn, async () => {
+      const c = childById(cid);
+      const since = new Date(Date.now() - 14 * 86400000).toISOString();
+      const { data: logs } = await sb.from("logs").select("*").eq("child_id", cid).gte("at", since).order("at", { ascending: false }).limit(500);
+      const pdf = await pdfDoc(`Fiche santé · ${c.first_name}`, `${c.birth_date ? "Né(e) le " + parseYmd(c.birth_date).toLocaleDateString("fr-FR") + " (" + (age(c.birth_date) || "nouveau-né") + ")" : ""}${state.household ? " · " + state.household.name : ""}`);
+      const notes = state.items.filter((i) => i.child_id === cid && (i.type === "note" || i.type === "sante"));
+      if (notes.length) { pdf.h2("À savoir"); notes.forEach((n) => pdf.p(`- ${n.title}${n.details ? " : " + n.details : ""}`)); }
+      const today = ymd(new Date());
+      const trts = state.treatments.filter((t) => t.child_id === cid);
+      pdf.h2("Traitements");
+      if (trts.length) pdf.table([{ label: "Médicament", w: 58 }, { label: "Dose", w: 34 }, { label: "Horaires", w: 46 }, { label: "Période", w: 40 }],
+        trts.map((t) => [t.name, t.dose || "", trtSchedule(t).split(" · ").slice(0, 2).join(", "), `${parseYmd(t.start_date).toLocaleDateString("fr-FR")}${t.end_date ? " au " + parseYmd(t.end_date).toLocaleDateString("fr-FR") : ", en cours"}${t.end_date && t.end_date < today ? " (terminé)" : ""}`]));
+      else pdf.p("Aucun traitement enregistré.", { muted: true });
+      if (!isAdult(c) && c.birth_date) {
+        pdf.h2("Vaccins (calendrier officiel 2026)");
+        const rows = [];
+        vacMilestones(c).forEach((ms) => ms.list.forEach((v) => rows.push([ms.age, v.label + (v.mandatory ? " (obligatoire)" : ""), v.done ? "Fait le " + parseYmd(v.done.done_on).toLocaleDateString("fr-FR") + (v.done.note ? ", " + v.done.note : "") : ms.status === "late" ? "Pas noté (en retard)" : ms.status === "upcoming" ? "À venir, vers le " + fmtDate(ms.due) : "À faire"])));
+        state.vaccines.filter((x) => x.child_id === cid && x.vaccine_key.startsWith("autre-")).forEach((x) => rows.push(["Autre", x.note || "Vaccin", "Fait le " + parseYmd(x.done_on).toLocaleDateString("fr-FR")]));
+        pdf.table([{ label: "Âge", w: 26 }, { label: "Vaccin", w: 92 }, { label: "Statut", w: 60 }], rows);
+      }
+      const health = (logs || []).filter((l) => ["medicament", "temperature"].includes(l.kind));
+      pdf.h2("Médicaments et températures (14 derniers jours)");
+      if (health.length) pdf.table([{ label: "Date", w: 46 }, { label: "Type", w: 34 }, { label: "Détail", w: 98 }],
+        health.map((l) => [`${new Date(l.at).toLocaleDateString("fr-FR")} ${fmtTime(l.at)}`, KINDS[l.kind].label, logLabel(l) + (l.note ? " · " + l.note : "")]));
+      else pdf.p("Rien de noté.", { muted: true });
+      const band = ageBand(c);
+      if (band === "bebe" || band === "petit") {
+        pdf.h2("Journal des 3 derniers jours");
+        const from = startOfDay(new Date(Date.now() - 2 * 86400000));
+        const recent = (logs || []).filter((l) => new Date(l.at) >= from && !["medicament", "temperature", "transmission"].includes(l.kind));
+        if (recent.length) pdf.table([{ label: "Date", w: 46 }, { label: "Type", w: 34 }, { label: "Détail", w: 98 }],
+          recent.map((l) => [`${new Date(l.at).toLocaleDateString("fr-FR")} ${fmtTime(l.at)}`, KINDS[l.kind].label, logLabel(l) + (l.note ? " · " + l.note : "")]));
+        else pdf.p("Rien de noté.", { muted: true });
+      }
+      pdf.p("Fiche établie à partir des informations saisies par la famille dans Tribu. Elle ne remplace pas le carnet de santé.", { muted: true, size: 9 });
+      await pdf.share(`fiche-sante-${slug(c.first_name)}.pdf`);
     });
   }
 

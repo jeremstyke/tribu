@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 19;
+  const TRIBU_VERSION = 20;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -20,7 +20,7 @@
 
   const state = {
     session: null, household: null, me: null, members: [], memberships: [], passkeys: [], pushOn: false, notif: null,
-    children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [],
+    children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [],
     filter: "all", channel: null, photoUrls: {}
   };
 
@@ -127,14 +127,15 @@
   async function loadAll() {
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
-    const [c, i, s, ph, lg, ac, tr] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr, vc] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
       sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false }),
       sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000),
       sb.from("activities").select("*").eq("household_id", hid).order("start_time"),
-      sb.from("treatments").select("*").eq("household_id", hid).order("created_at")
+      sb.from("treatments").select("*").eq("household_id", hid).order("created_at"),
+      sb.from("vaccines_done").select("*").eq("household_id", hid)
     ]);
     state.children = (c.data || []).sort((a, b) => (a.kind === "adulte") - (b.kind === "adulte"));
     state.items = i.data || [];
@@ -143,6 +144,7 @@
     state.logs = lg.data || [];
     state.activities = ac.data || [];
     state.treatments = tr.data || [];
+    state.vaccines = vc.data || [];
     await loadPhotoUrls();
   }
 
@@ -223,7 +225,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -265,10 +267,11 @@
     let body = "";
     if (page === "enfants") body = viewChildren();
     else if (page === "enfant") body = viewChild(id);
+    else if (page === "vaccins") body = viewVaccines(id);
     else if (page === "courses") body = viewShopping();
     else if (page === "reglages") body = viewSettings();
     else body = viewHome();
-    const active = page === "enfant" ? "enfants" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
+    const active = page === "enfant" || page === "vaccins" ? "enfants" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
     const showFab = active === "accueil" || page === "enfant";
     $app.innerHTML = `
       <main class="wrap">${body}</main>
@@ -600,6 +603,8 @@
       html += `<section class="day"><div class="day-title">💊 Traitements du jour <span class="muted small">${left ? left + " à donner" : "tout est donné ✓"}</span></div>${doses.map((d) => doseRow(d)).join("")}</section>`;
     }
 
+    html += vaccinesHomeHtml();
+
     if (!state.children.length) {
       html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
     }
@@ -654,6 +659,7 @@
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
+    html += vaccinesSummaryHtml(c);
     const trts = state.treatments.filter((t) => t.child_id === id);
     const today = ymd(new Date());
     const cur = trts.filter((t) => !t.end_date || t.end_date >= today), past = trts.filter((t) => t.end_date && t.end_date < today);
@@ -1462,6 +1468,168 @@
     });
   }
 
+  // ---------- Vaccins (calendrier officiel 2026, ministère de la Santé) ----------
+  const VAC_SOURCE = "Calendrier des vaccinations 2026, ministère de la Santé";
+  function vaccineSchedule(c) {
+    if (!c || !c.birth_date) return [];
+    const O = true, R = false;
+    const v = (key, label, mandatory) => ({ key, label, mandatory });
+    if (isAdult(c)) return [
+      { m: 300, age: "25 ans", vaccines: [v("dtcap_25a", "Rappel dTcaP (diphtérie, tétanos, coqueluche, polio)", R)] },
+      { m: 540, age: "45 ans", vaccines: [v("dtp_45a", "Rappel dTP (diphtérie, tétanos, polio)", R)] },
+      { m: 780, age: "65 ans", vaccines: [v("dtp_65a", "Rappel dTP", R), v("pneumo_65a", "Pneumocoque, dose unique", R), v("zona_65a", "Zona, 2 doses à 2 mois d'écart", R)] },
+      { m: 900, age: "75 ans", vaccines: [v("dtp_75a", "Rappel dTP", R), v("vrs_75a", "VRS, dose unique", R)] },
+      { m: 1020, age: "85 ans", vaccines: [v("dtp_85a", "Rappel dTP", R)] }
+    ];
+    const n = c.birth_date >= "2025-01-01"; // nés depuis 2025 : méningocoques ACWY et B obligatoires
+    return [
+      { m: 2, age: "2 mois", vaccines: [v("hexa_2m", "Hexavalent (diphtérie, tétanos, polio, coqueluche, Hib, hépatite B)", O), v("pneumo_2m", "Pneumocoque", O), v("rota_2m", "Rotavirus (par la bouche)", R)] },
+      { m: 3, age: "3 mois", vaccines: [v("menb_3m", "Méningocoque B", n), v("rota_3m", "Rotavirus, 2e dose", R)] },
+      { m: 4, age: "4 mois", vaccines: [v("hexa_4m", "Hexavalent, 2e dose", O), v("pneumo_4m", "Pneumocoque, 2e dose", O), v("rota_4m", "Rotavirus, 3e dose (selon le vaccin)", R)] },
+      { m: 5, age: "5 mois", vaccines: n ? [v("menb_5m", "Méningocoque B, 2e dose", O)] : [v("menc_5m", "Méningocoque C", O), v("menb_5m", "Méningocoque B, 2e dose", R)] },
+      ...(n ? [{ m: 6, age: "6 mois", vaccines: [v("acwy_6m", "Méningocoque ACWY", O)] }] : []),
+      { m: 11, age: "11 mois", vaccines: [v("hexa_11m", "Hexavalent, rappel", O), v("pneumo_11m", "Pneumocoque, rappel", O)] },
+      { m: 12, age: "12 mois", vaccines: [v("ror_12m", "ROR (rougeole, oreillons, rubéole), 1re dose", O), ...(n ? [v("menb_12m", "Méningocoque B, rappel", O), v("acwy_12m", "Méningocoque ACWY, rappel", O)] : [v("menc_12m", "Méningocoque C, rappel", O), v("menb_12m", "Méningocoque B, rappel", R)])] },
+      { m: 16, age: "16-18 mois", vaccines: [v("ror_16m", "ROR, 2e dose", O)] },
+      { m: 72, age: "6 ans", vaccines: [v("dtcap_6a", "Rappel DTCaP (diphtérie, tétanos, coqueluche, polio)", R)] },
+      { m: 132, age: "11-13 ans", vaccines: [v("dtcap_11a", "Rappel dTcaP", R), v("acwy_11a", "Méningocoque ACWY", R), v("hpv1_11a", "HPV (papillomavirus), 1re dose", R)] },
+      { m: 138, age: "11-14 ans", vaccines: [v("hpv2_11a", "HPV, 2e dose (6 mois après la 1re)", R)] }
+    ];
+  }
+  const addMonths = (dateStr, m) => { const [y, mo, d] = dateStr.split("-").map(Number); return new Date(y, mo - 1 + m, d); };
+  const vacDone = (cid, key) => state.vaccines.find((x) => x.child_id === cid && x.vaccine_key === key);
+  function vacMilestones(c) {
+    const today = startOfDay(new Date());
+    return vaccineSchedule(c).map((ms) => {
+      const due = addMonths(c.birth_date, ms.m);
+      const grace = ms.m <= 24 ? 30 : ms.m <= 200 ? 365 : 5 * 365;
+      const list = ms.vaccines.map((v) => ({ ...v, done: vacDone(c.id, v.key) }));
+      const left = list.filter((v) => !v.done);
+      let status = "done";
+      if (left.length) {
+        if (today > new Date(due.getTime() + grace * 86400000)) status = "late";
+        else if (today >= new Date(due.getTime() - 14 * 86400000)) status = "due";
+        else status = "upcoming";
+      }
+      return { ...ms, due, list, left, status };
+    });
+  }
+  const VAC_STATUS = { done: ["✓ Fait", "ok"], due: ["À faire", "due"], late: ["En retard", "late"], upcoming: ["À venir", ""] };
+  const fmtDate = (d) => d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+
+  function vaccinesSummaryHtml(c) {
+    if (!c.birth_date) return `<h2>💉 Vaccins</h2><p class="muted small">Ajoute sa date de naissance (Modifier) pour suivre ses rappels de vaccins.</p>`;
+    const ms = vacMilestones(c);
+    const late = ms.filter((x) => x.status === "late"), due = ms.filter((x) => x.status === "due");
+    const next = ms.find((x) => x.status === "due" || x.status === "upcoming");
+    const extra = state.vaccines.filter((x) => x.child_id === c.id && x.vaccine_key.startsWith("autre-")).length;
+    return `<h2>💉 Vaccins</h2>
+      <div class="item" style="--c:${esc(c.color)}"><div class="tab"></div><div class="body" role="button" tabindex="0" data-go="#/vaccins/${c.id}">
+        <div class="line1"><span class="title">${next ? `Prochain : ${esc(next.age)}` : "Calendrier à jour ✓"}</span></div>
+        <div class="meta">${next ? `vers le ${fmtDate(next.due)} · ${next.left.length} vaccin${next.left.length > 1 ? "s" : ""}` : "Tous les vaccins prévus sont notés"}${late.length ? ` · <span style="color:var(--danger);font-weight:700">${late.length} étape${late.length > 1 ? "s" : ""} en retard</span>` : ""}${due.length && next && next.status !== "due" ? " · " + due.length + " à faire" : ""}${extra ? " · " + extra + " autre" + (extra > 1 ? "s" : "") : ""}</div>
+      </div></div>`;
+  }
+
+  function viewVaccines(id) {
+    const c = childById(id);
+    if (!c) { location.hash = "#/enfants"; return ""; }
+    if (!c.birth_date) { location.hash = "#/enfant/" + id; return ""; }
+    const ms = vacMilestones(c);
+    const today = startOfDay(new Date());
+    const pastMissing = ms.filter((x) => x.due < today && x.left.length).reduce((a, x) => a + x.left.length, 0);
+    const born = c.birth_date < "2025-01-01";
+    const ageM = ageMonths(c.birth_date);
+    const others = state.vaccines.filter((x) => x.child_id === c.id && x.vaccine_key.startsWith("autre-")).sort((a, b) => b.done_on.localeCompare(a.done_on));
+    let html = `
+      <button class="back" onclick="location.hash='#/enfant/${c.id}'">‹ ${esc(c.first_name)}</button>
+      <header class="top"><h1>Vaccins</h1></header>
+      <div class="vac-info small">D'après le <strong>calendrier officiel 2026</strong> du ministère de la Santé. Tribu t'aide à suivre les rappels, mais ne remplace ni le carnet de santé ni l'avis de ton médecin, qui peut adapter le calendrier.${!isAdult(c) ? ` <strong>Obligatoire</strong> = exigé pour l'entrée en crèche ou à l'école.` : ""}</div>
+      ${!isAdult(c) && born && ageM >= 24 && ageM < 60 ? `<div class="vac-info small" style="border-color:var(--accent)">Pour les enfants de 2 à 4 ans, un <strong>rattrapage des méningocoques ACWY et B</strong> est recommandé en 2026. Parles-en à ton médecin.</div>` : ""}
+      ${pastMissing ? `<button class="btn ghost block" id="vac-catchup">Déjà à jour ? Tout cocher jusqu'à aujourd'hui (${pastMissing})</button>` : ""}`;
+    ms.forEach((x) => {
+      const [lab, cls] = VAC_STATUS[x.status];
+      html += `<div class="vac-step"><div class="vac-head"><span><strong>${esc(x.age)}</strong> <span class="muted small">· ${fmtDate(x.due)}</span></span><span class="pill ${cls}">${lab}</span></div>
+        ${x.list.map((v) => `<div class="vac-row ${v.done ? "done" : ""}">
+          <button class="check" data-vac="${c.id}|${v.key}" aria-label="${v.done ? "Modifier" : "Marquer comme fait"}"><i>${v.done ? "✓" : ""}</i></button>
+          <div class="vac-text" data-vac-open="${c.id}|${v.key}" role="button" tabindex="0">${esc(v.label)}${v.mandatory ? ` <span class="tag">Obligatoire</span>` : ""}
+            ${v.done ? `<div class="muted small">Fait le ${fmtDate(parseYmd(v.done.done_on))}${v.done.note ? " · " + esc(v.done.note) : ""}</div>` : ""}</div>
+        </div>`).join("")}</div>`;
+    });
+    html += `<h2>Autres vaccins</h2>
+      ${others.map((o) => `<div class="vac-row done"><button class="check" data-vac="${c.id}|${o.vaccine_key}"><i>✓</i></button><div class="vac-text" data-vac-open="${c.id}|${o.vaccine_key}" role="button" tabindex="0">${esc(o.name || "Vaccin")}<div class="muted small">Fait le ${fmtDate(parseYmd(o.done_on))}${o.note ? " · " + esc(o.note) : ""}</div></div></div>`).join("") || `<p class="muted small">Grippe, voyage, rattrapage... ajoute ici les vaccins hors calendrier.</p>`}
+      <button class="btn ghost block" data-vac-other="${c.id}">Ajouter un autre vaccin</button>
+      <p class="muted small" style="margin-top:18px">Source : ${VAC_SOURCE}.</p>`;
+    return html;
+  }
+
+  function vaccineSheet(cid, key) {
+    const c = childById(cid);
+    const isOther = key === "new" || key.startsWith("autre-");
+    const v = isOther ? null : vaccineSchedule(c).flatMap((x) => x.vaccines).find((x) => x.key === key);
+    const rec = key !== "new" ? vacDone(cid, key) : null;
+    const today = ymd(new Date());
+    openSheet(`
+      <h2 style="margin-top:0">💉 ${v ? esc(v.label) : rec ? esc(rec.name || "Vaccin") : "Autre vaccin"}</h2>
+      <p class="muted small" style="margin-top:0">${esc(c.first_name)}</p>
+      <form id="vf">
+        ${isOther ? `<label for="vf-name">Vaccin</label><input id="vf-name" required maxlength="80" value="${esc(rec ? rec.name || "" : "")}" placeholder="Ex : Grippe, Fièvre jaune">` : ""}
+        <label for="vf-date">Fait le</label>
+        <input id="vf-date" type="date" required max="${today}" value="${esc(rec ? rec.done_on : today)}">
+        <label for="vf-note">Note (facultatif)</label>
+        <input id="vf-note" maxlength="200" value="${esc(rec && rec.note ? rec.note : "")}" placeholder="Ex : nom du vaccin, numéro de lot, médecin">
+        <div class="actions">
+          ${rec ? `<button type="button" class="btn danger" id="vf-del">${isOther ? "Supprimer" : "Pas encore fait"}</button>` : `<button type="button" class="btn ghost" id="vf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">Enregistrer</button>
+        </div>
+      </form>`, (el) => {
+      const cancel = el.querySelector("#vf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#vf-del");
+      if (del) del.onclick = async () => { await sb.from("vaccines_done").delete().eq("id", rec.id); closeSheet(); await loadAll(); render(); };
+      el.querySelector("#vf").onsubmit = async (e) => {
+        e.preventDefault();
+        const row = { done_on: el.querySelector("#vf-date").value || today, note: el.querySelector("#vf-note").value.trim() || null };
+        if (isOther) { row.name = el.querySelector("#vf-name").value.trim(); if (!row.name) return; }
+        const { error } = rec
+          ? await sb.from("vaccines_done").update(row).eq("id", rec.id)
+          : await sb.from("vaccines_done").insert({ ...row, household_id: state.household.id, child_id: cid, vaccine_key: key === "new" ? "autre-" + Date.now() : key });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast("Vaccin noté");
+      };
+    });
+  }
+  async function quickVaccine(cid, key) {
+    const rec = vacDone(cid, key);
+    if (rec || key.startsWith("autre-")) return vaccineSheet(cid, key);
+    const { error } = await sb.from("vaccines_done").insert({ household_id: state.household.id, child_id: cid, vaccine_key: key, done_on: ymd(new Date()) });
+    if (error) return toast(errMsg(error));
+    await loadAll(); render(); toast("Noté fait aujourd'hui. Appuie sur le nom pour changer la date.", 3500);
+  }
+  async function vaccineCatchup(cid) {
+    const c = childById(cid);
+    const today = startOfDay(new Date());
+    const rows = vacMilestones(c).filter((x) => x.due < today).flatMap((x) => x.left.map((v) => ({ household_id: state.household.id, child_id: cid, vaccine_key: v.key, done_on: ymd(x.due), note: "Coché en lot" })));
+    if (!rows.length) return;
+    if (!confirm(`Cocher ${rows.length} vaccin${rows.length > 1 ? "s" : ""} comme faits, aux dates prévues par le calendrier ? Tu pourras corriger chaque date ensuite.`)) return;
+    const { error } = await sb.from("vaccines_done").upsert(rows, { onConflict: "child_id,vaccine_key", ignoreDuplicates: true });
+    if (error) return toast(errMsg(error));
+    await loadAll(); render(); toast("Carnet mis à jour");
+  }
+  function vaccinesHomeHtml() {
+    const today = startOfDay(new Date());
+    const rows = [];
+    state.children.filter((c) => !isAdult(c) && c.birth_date && (state.filter === "all" || state.filter === c.id)).forEach((c) => {
+      vacMilestones(c).forEach((x) => {
+        if ((x.status === "due" || x.status === "late") && x.due >= new Date(today.getTime() - 180 * 86400000)) rows.push({ c, x });
+      });
+    });
+    if (!rows.length) return "";
+    return `<section class="day"><div class="day-title">💉 Vaccins à prévoir</div>${rows.map(({ c, x }) => `
+      <div class="item" style="--c:${esc(c.color)}"><div class="tab"></div><div class="body" role="button" tabindex="0" data-go="#/vaccins/${c.id}">
+        <div class="line1"><span class="title">Vaccins des ${esc(x.age)}</span></div>
+        <div class="meta">${esc(c.first_name)} · ${x.status === "late" ? `<span style="color:var(--danger);font-weight:700">en retard</span>, prévu le ${fmtDate(x.due)}` : "vers le " + fmtDate(x.due)} · ${x.left.length} vaccin${x.left.length > 1 ? "s" : ""}</div>
+      </div></div>`).join("")}</section>`;
+  }
+
   // ---------- Album ----------
   function photoForm(childId, photo) {
     const child = childById(childId || photo.child_id);
@@ -1771,6 +1939,11 @@
       await sb.from("items").update({ done: it.done }).eq("id", it.id);
     });
     const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-go]").forEach((b) => { const go = () => { location.hash = b.dataset.go; }; b.onclick = go; b.onkeydown = (e) => { if (e.key === "Enter") go(); }; });
+    $app.querySelectorAll("[data-vac]").forEach((b) => b.onclick = () => { const [cid, key] = b.dataset.vac.split("|"); quickVaccine(cid, key); });
+    $app.querySelectorAll("[data-vac-open]").forEach((b) => { const open = () => { const [cid, key] = b.dataset.vacOpen.split("|"); vaccineSheet(cid, key); }; b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); }; });
+    $app.querySelectorAll("[data-vac-other]").forEach((b) => b.onclick = () => vaccineSheet(b.dataset.vacOther, "new"));
+    const vcu = document.getElementById("vac-catchup"); if (vcu) vcu.onclick = () => vaccineCatchup(route()[1]);
     $app.querySelectorAll("[data-trt-add]").forEach((b) => b.onclick = () => treatmentForm(b.dataset.trtAdd));
     $app.querySelectorAll("[data-trt]").forEach((b) => {
       const open = () => { const t = state.treatments.find((x) => x.id === b.dataset.trt); if (t) treatmentForm(t.child_id, t); };
@@ -1934,7 +2107,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

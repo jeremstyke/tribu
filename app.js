@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 28;
+  const TRIBU_VERSION = 29;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -380,7 +380,6 @@
       <div class="card">
         <button class="btn block" id="pk-login">Se connecter avec ${bio}</button>
         <button class="btn ghost block" style="margin-top:10px" id="go-signup">Créer un compte</button>
-        <button class="link small" id="go-pwd">Se connecter avec un mot de passe</button>
         <div id="err" class="error" hidden></div>
       </div>`;
     if (mode === "signup") card = `
@@ -391,7 +390,6 @@
         <input id="email" type="email" autocomplete="email" required>
         <div id="err" class="error" hidden></div>
         <button class="btn block" style="margin-top:18px" type="submit">Créer mon compte avec ${bio}</button>
-        <button class="link small" type="button" id="go-signup-pwd">Créer un compte avec un mot de passe</button>
         <button class="link small" type="button" id="go-home">J'ai déjà un compte</button>
       </form>`;
     if (mode === "signup-pwd" || mode === "login-pwd") {
@@ -485,9 +483,9 @@
   }
 
   // ---------- Bêta limitée (le nombre de places vient de la base) ----------
-  let BETA_LIMIT = 25;
+  const BETA_LIMIT = 25;
   async function betaSpots() {
-    try { const { data } = await sb.rpc("beta_spots"); if (data) { state.beta = data; if (data.limit) BETA_LIMIT = data.limit; } } catch (_) {}
+    try { const { data } = await sb.rpc("beta_spots"); if (data) state.beta = { ...data, limit: BETA_LIMIT, left: Math.max(0, BETA_LIMIT - (data.used || 0)) }; } catch (_) {}
     return state.beta;
   }
   const betaPill = () => {
@@ -2225,10 +2223,10 @@
   }
 
   // ---------- Espace pro (assistantes maternelles, nounous, micro-crèches) ----------
-  let PRO_LIMIT = 10;
+  const PRO_LIMIT = 10;
   const PRO_KINDS = { assmat: "Assistante maternelle", nounou: "Nounou à domicile", creche: "Micro-crèche" };
   async function proSpots() {
-    try { const { data } = await sb.rpc("pro_spots"); if (data) { state.proBeta = data; if (data.limit) PRO_LIMIT = data.limit; } } catch (_) {}
+    try { const { data } = await sb.rpc("pro_spots"); if (data) state.proBeta = { ...data, limit: PRO_LIMIT, left: Math.max(0, PRO_LIMIT - (data.used || 0)) }; } catch (_) {}
     return state.proBeta;
   }
   const proPill = () => {

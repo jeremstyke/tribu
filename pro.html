@@ -12,8 +12,8 @@
   <meta property="og:image" content="https://jeremstyke.github.io/tribu/og.png?v=1">
   <meta property="og:url" content="https://jeremstyke.github.io/tribu/pro.html">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=28">
-  <link rel="stylesheet" href="guides/guides.css?v=28">
+  <link rel="stylesheet" href="styles.css?v=29">
+  <link rel="stylesheet" href="guides/guides.css?v=29">
 </head>
 <body>
   <main class="guide">
@@ -53,7 +53,7 @@
   </main>
   <script>
     fetch("https://mnblhbjfkvtiyaqetaib.supabase.co/rest/v1/rpc/pro_spots", { method: "POST", headers: { apikey: "sb_publishable_3iqSMZcndyhL9ZLWoRd9eQ_8XzVI2U2", "Content-Type": "application/json" }, body: "{}" })
-      .then((r) => r.json()).then((b) => { if (b && typeof b.left === "number") document.getElementById("spots").innerHTML = "👩‍🍼 Bêta pro ouverte à " + (b.limit || 10) + " professionnels · " + (b.left ? "encore <strong>" + b.left + "</strong> place" + (b.left > 1 ? "s" : "") : "<strong>complet</strong>"); })
+      .then((r) => r.json()).then((b) => { if (b && typeof b.used === "number") { const left = Math.max(0, 10 - b.used); document.getElementById("spots").innerHTML = "👩‍🍼 Bêta pro ouverte à 10 professionnels · " + (left ? "encore <strong>" + left + "</strong> place" + (left > 1 ? "s" : "") : "<strong>complet</strong>"); } })
       .catch(() => {});
   </script>
 </body>

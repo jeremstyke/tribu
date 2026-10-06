@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 24;
+  const TRIBU_VERSION = 25;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -520,8 +520,9 @@
   // ---------- Onboarding ----------
   function renderOnboarding(mode = "create") {
     const create = mode === "create";
+    const viaPro = ls.get(PRO_LINK_KEY);
     if (create && !state.beta && !state.betaTried) { state.betaTried = true; betaSpots().then((b) => { if (b && !b.left) renderOnboarding(mode); else refreshBetaPill(); }); }
-    if (create && state.beta && state.beta.left <= 0) {
+    if (create && state.beta && state.beta.left <= 0 && !viaPro) {
       $app.innerHTML = `<div class="hero"><h1>Ta tribu</h1>${betaPill()}${waitlistHtml(state.session && state.session.user.email)}
         <button class="link" id="switch">J'ai un code d'invitation</button><button class="link small muted" id="logout">Se déconnecter</button></div>`;
       bindWaitlist();
@@ -532,7 +533,7 @@
     $app.innerHTML = `
       <div class="hero">
         <h1>${create ? "Ta tribu" : "Rejoindre"}</h1>
-        ${create ? betaPill() : ""}
+        ${!create ? "" : viaPro ? `<span class="beta-pill">🎟️ Invité par ta nounou : ta place est réservée</span>` : betaPill()}
         <p class="lead">${create ? "Crée l'espace de ta famille, puis invite l'autre parent avec un code." : "Saisis le code reçu pour rejoindre la tribu de ta famille."}</p>
         <form class="card" id="onb">
           <label for="dn">Ton prénom</label>
@@ -557,10 +558,13 @@
       const dn = document.getElementById("dn").value.trim();
       const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
       try {
-        const rpc = create
-          ? sb.rpc("create_household", { p_name: document.getElementById("hn").value.trim(), p_display_name: dn })
-          : sb.rpc("join_household", { p_code: document.getElementById("code").value.trim(), p_display_name: dn });
-        const { data: newHid, error } = await rpc;
+        const base = { p_name: create ? document.getElementById("hn").value.trim() : "", p_display_name: dn };
+        let res = create
+          ? await sb.rpc("create_household", viaPro ? { ...base, p_pro_code: viaPro } : base)
+          : await sb.rpc("join_household", { p_code: document.getElementById("code").value.trim(), p_display_name: dn });
+        // Base pas encore à jour : on réessaie sans le code pro
+        if (create && viaPro && res.error && /function|PGRST202/i.test(res.error.message + (res.error.code || ""))) res = await sb.rpc("create_household", base);
+        const { data: newHid, error } = res;
         if (error) throw error;
         ls.set(HID_KEY, newHid);
         history.replaceState(null, "", location.pathname + "#/accueil");

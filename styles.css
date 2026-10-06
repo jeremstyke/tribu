@@ -415,3 +415,33 @@ html:has(#app > .nav), html:has(#app > .nav) body { height: 100%; overflow: hidd
 .chip-t { font: inherit; font-size: .85rem; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 10px; cursor: pointer; color: inherit; }
 
 .rem-line { display: block; width: 100%; text-align: left; font: inherit; font-size: .9rem; font-weight: 600; color: var(--ink); background: var(--surface); border: 1.5px dashed var(--accent); border-radius: var(--radius-sm); padding: 12px 14px; margin: 12px 0 0; cursor: pointer; }
+
+/* Souvenirs */
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0 10px; }
+.cal-head .btn { padding: 8px 16px; min-width: 0; }
+.cal-head strong { font-size: 1.15rem; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow { text-align: center; font-size: .75rem; font-weight: 700; color: var(--ink-soft); padding: 4px 0; }
+.cal-day { position: relative; aspect-ratio: 1; border-radius: 10px; border: 1px solid var(--line); background: var(--surface) center / cover no-repeat; font: inherit; color: inherit; cursor: pointer; padding: 0; overflow: hidden; }
+.cal-day:disabled { opacity: .35; cursor: default; }
+.cal-day.today { border: 2px solid var(--accent); }
+.cal-day .cd-n { position: absolute; top: 3px; left: 5px; font-size: .78rem; font-weight: 700; }
+.cal-day.has .cd-n { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+.cal-day .cd-c { position: absolute; bottom: 3px; right: 4px; font-size: .68rem; font-weight: 700; background: rgba(0,0,0,.55); color: #fff; border-radius: 999px; padding: 0 5px; }
+.cal-day .cd-note { position: absolute; bottom: 2px; left: 3px; font-size: .7rem; }
+.albums { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.album-card { display: flex; flex-direction: column; gap: 4px; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 8px 8px 12px; font: inherit; color: inherit; cursor: pointer; }
+.ac-cover { aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: var(--bg); display: grid; place-items: center; }
+.ac-cover img { width: 100%; height: 100%; object-fit: cover; }
+.ac-emo { font-size: 2.6rem; }
+.ac-t { font-weight: 700; padding: 0 4px; }
+.album-card .muted { padding: 0 4px; }
+.pick-grid .album-cell { position: relative; }
+.pick-check { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.3); color: transparent; display: grid; place-items: center; font-weight: 700; }
+.pick-grid .album-cell[aria-pressed="true"] .pick-check { background: var(--accent); color: #1F2D4D; }
+.pick-grid .album-cell[aria-pressed="true"] img { opacity: .75; }
+.memory { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; padding: 12px; }
+.mem-imgs { display: flex; flex: none; }
+.mem-imgs img { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; border: 2px solid var(--surface); margin-left: -16px; }
+.mem-imgs img:first-child { margin-left: 0; }
+button.news-entry { width: 100%; text-align: left; font: inherit; color: inherit; }

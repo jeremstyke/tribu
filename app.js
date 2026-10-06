@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 43;
+  const TRIBU_VERSION = 44;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -141,7 +141,7 @@
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
     const fromDay = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
-    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms, ch, cd, br] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms, ch, cd, br, al, ap, dn] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
@@ -155,8 +155,12 @@
       sb.from("measures").select("*").eq("household_id", hid).order("measured_on"),
       sb.from("chores").select("*").eq("household_id", hid).order("created_at"),
       sb.from("chore_done").select("*").eq("household_id", hid).gte("day", ymd(new Date(Date.now() - 35 * 86400000))),
-      sb.from("baby_reminders").select("*").eq("household_id", hid)
+      sb.from("baby_reminders").select("*").eq("household_id", hid),
+      sb.from("albums").select("*").eq("household_id", hid).order("created_at", { ascending: false }),
+      sb.from("album_photos").select("album_id, photo_id").eq("household_id", hid),
+      sb.from("day_notes").select("*").eq("household_id", hid)
     ]);
+    state.albums = al.data || []; state.albumPhotos = ap.data || []; state.dayNotes = dn.data || [];
     state.babyRem = br.data || [];
     state.chores = ch.data || []; state.choreDone = cd.data || [];
     state.measures = ms.data || [];
@@ -210,8 +214,8 @@
   }
 
   // Album : un appui sur "+ Photo", on choisit, c'est envoyé
-  async function uploadAlbum(childId, fileList) {
-    const files = [...fileList].slice(0, 30);
+  async function uploadAlbum(childId, fileList, opts = {}) {
+    const files = [...fileList].slice(0, 50);
     if (!files.length) return;
     const today = new Date().toISOString().slice(0, 10);
     let ok = 0, failed = 0, quota = false;
@@ -219,13 +223,15 @@
       progress(`Envoi des photos : ${i + 1} sur ${files.length}`);
       const f = files[i];
       try {
-        const blob = await resizePhoto(f, 1600);
-        let date = today;
-        if (f.lastModified) { const d = new Date(f.lastModified).toISOString().slice(0, 10); if (d <= today) date = d; }
+        const shot = opts.day ? null : await exifDate(f);
+        const blob = await resizePhoto(f, 1440);
+        let date = opts.day || (shot && shot <= today ? shot : today);
+        if (!opts.day && !shot && f.lastModified) { const d = ymd(new Date(f.lastModified)); if (d <= today) date = d; }
         const path = `${state.household.id}/${childId}/album/${Date.now()}-${i}.jpg`;
         const up = await sb.storage.from("child-photos").upload(path, blob, { contentType: blob.type || "image/jpeg" });
         if (up.error) throw up.error;
-        const { error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: childId, path, taken_on: date, created_by: state.session.user.id });
+        const { data: row, error } = await sb.from("photos").insert({ household_id: state.household.id, child_id: childId, path, taken_on: date, created_by: state.session.user.id }).select("id").single();
+        if (!error && opts.albumId) await sb.from("album_photos").insert({ album_id: opts.albumId, photo_id: row.id, household_id: state.household.id });
         if (error) { await sb.storage.from("child-photos").remove([path]); if (/quota/i.test(error.message)) { quota = true; break; } throw error; }
         ok++;
       } catch (_) { failed++; }
@@ -233,7 +239,7 @@
     progress(null);
     await loadAll(); render();
     let msg = ok ? `${ok} photo${ok > 1 ? "s" : ""} ajoutée${ok > 1 ? "s" : ""}. Appuie sur une photo pour ajouter une note.` : "Aucune photo ajoutée.";
-    if (quota) msg = "L'album de ta tribu est plein (100 photos). " + (ok ? `${ok} ajoutée${ok > 1 ? "s" : ""}.` : "");
+    if (quota) msg = "Ta tribu a atteint 500 photos. " + (ok ? `${ok} ajoutée${ok > 1 ? "s" : ""}.` : "");
     else if (failed) msg += ` ${failed} n'a pas pu être envoyée${failed > 1 ? "s" : ""}.`;
     toast(msg, 4500);
   }
@@ -250,7 +256,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode === "pro") return; await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures", "chores", "chore_done", "baby_reminders"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures", "chores", "chore_done", "baby_reminders", "albums", "album_photos", "day_notes"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -308,10 +314,14 @@
     else if (page === "vaccins") body = viewVaccines(id);
     else if (page === "courses") body = viewShopping();
     else if (page === "menage") body = viewChores();
+    else if (page === "souvenirs") body = viewMemories(id);
+    else if (page === "jour") body = viewDay(id);
+    else if (page === "albums") body = viewAlbums();
+    else if (page === "album") body = viewAlbum(id);
     else if (page === "reglages") body = viewSettings();
     else if (page === "nouveautes") body = viewNews();
     else body = viewHome();
-    const active = page === "enfant" || page === "vaccins" ? "enfants" : page === "nouveautes" ? "reglages" : page === "menage" ? "courses" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
+    const active = ["enfant", "vaccins", "souvenirs", "jour", "albums", "album"].includes(page) ? "enfants" : page === "nouveautes" ? "reglages" : page === "menage" ? "courses" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
     const showFab = active === "accueil" || page === "enfant";
     const st = mainScroll();
     $app.innerHTML = `
@@ -713,6 +723,7 @@
       ${chipsHtml()}
       ${homeBanner()}
       ${proHomeHtml()}`;
+    html += memoriesHomeHtml();
 
     state.children.filter((c) => (state.filter === "all" || state.filter === c.id) && ["bebe", "petit"].includes(ageBand(c))).forEach((c) => {
       html += `<section class="baby-card" style="--c:${esc(c.color)}">
@@ -750,7 +761,8 @@
   }
 
   function viewChildren() {
-    let html = `<header class="top"><h1>Famille</h1></header>`;
+    let html = `<header class="top"><h1>Famille</h1></header>
+      <button class="card news-entry" data-go="#/souvenirs"><span class="rc-ico" aria-hidden="true">📸</span><span><strong>Souvenirs</strong><br><span class="muted small">Les photos jour par jour, le mot du jour et vos albums</span></span><span class="pk-go" aria-hidden="true">›</span></button>`;
     const card = (c) => {
       const n = state.items.filter((i) => i.child_id === c.id && i.due_at && new Date(i.due_at) >= startOfDay(new Date()) && !i.done).length;
       return `<a href="#/enfant/${c.id}" class="item" style="--c:${esc(c.color)};text-decoration:none;color:inherit">
@@ -813,7 +825,7 @@
           ${state.photoUrls[p.path] ? `<img src="${esc(state.photoUrls[p.path])}" alt="" loading="lazy">` : ""}
           ${p.note ? `<span class="album-note">${esc(p.note)}</span>` : ""}</button>`).join("")}
       </div>
-      ${album.length ? "" : `<p class="muted small">Ajoute des photos avec une petite note pour garder ses souvenirs : premiers pas, anniversaires, sorties...</p>`}`;
+      ${album.length ? `<button class="link small" data-mem-child="${c.id}">📅 Voir ses photos jour par jour ›</button>` : `<p class="muted small">Ajoute des photos avec une petite note pour garder ses souvenirs : premiers pas, anniversaires, sorties...</p>`}`;
     Object.entries(TYPES).forEach(([type, t]) => {
       let list = items.filter((i) => i.type === type);
       if (type === "rdv" || type === "tache") list = list.sort((a, b) => (a.done - b.done) || ((a.due_at || "9") > (b.due_at || "9") ? 1 : -1));
@@ -1804,11 +1816,20 @@
         <textarea id="pf-note" maxlength="1000" placeholder="Ex : Ses premiers pas dans le salon !">${esc(photo.note || "")}</textarea>
         <label for="pf-date">Date</label>
         <input id="pf-date" type="date" max="${today}" value="${photo.taken_on}">
+        ${(state.albums || []).length ? `<label>Albums</label><div class="seg" id="pf-alb">${state.albums.map((a) => `<button type="button" data-alb="${a.id}" aria-pressed="${(state.albumPhotos || []).some((x) => x.album_id === a.id && x.photo_id === photo.id)}">${esc(a.emoji)} ${esc(a.name)}</button>`).join("")}</div>` : ""}
         <div class="actions">
           <button type="button" class="btn danger" id="pf-del">Supprimer</button>
           <button class="btn" type="submit">Enregistrer</button>
         </div>
       </form>`, (el) => {
+      el.querySelectorAll("[data-alb]").forEach((b) => b.onclick = async () => {
+        const on = b.getAttribute("aria-pressed") === "true";
+        const { error } = on ? await sb.from("album_photos").delete().eq("album_id", b.dataset.alb).eq("photo_id", photo.id)
+          : await sb.from("album_photos").insert({ album_id: b.dataset.alb, photo_id: photo.id, household_id: state.household.id });
+        if (error) return toast(errMsg(error));
+        b.setAttribute("aria-pressed", !on);
+        const r = await sb.from("album_photos").select("album_id, photo_id").eq("household_id", state.household.id); state.albumPhotos = r.data || [];
+      });
       el.querySelector("#pf-del").onclick = async () => {
         if (!confirm("Supprimer cette photo de l'album ?")) return;
         await sb.from("photos").delete().eq("id", photo.id);
@@ -2141,6 +2162,7 @@
     $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
     $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
     bindNews();
+    bindMemories();
     $app.querySelectorAll("[data-chore-add]").forEach((b) => b.onclick = () => choreForm());
     $app.querySelectorAll("[data-chore-edit]").forEach((b) => b.onclick = () => choreForm(state.chores.find((x) => x.id === b.dataset.choreEdit)));
     $app.querySelectorAll("[data-chore-toggle]").forEach((b) => b.onclick = () => { b.disabled = true; const [id, day] = b.dataset.choreToggle.split("|"); toggleChore(id, day); });
@@ -3284,6 +3306,189 @@
         closeSheet(); await loadAll(); render(); toast(feed || diaper ? "Rappels enregistrés" : "Rappels désactivés");
       };
     });
+  }
+
+  // ---------- Souvenirs : calendrier des photos, mot du jour et albums ----------
+  const MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+  const photosOfDay = (day) => state.photos.filter((p) => p.taken_on === day && (state.filter === "all" || p.child_id === state.filter));
+  const dayNote = (day) => (state.dayNotes || []).find((n) => n.day === day);
+  const photoImg = (p) => state.photoUrls[p.path] ? `<img src="${esc(state.photoUrls[p.path])}" alt="" loading="lazy">` : "";
+  const photoGrid = (list) => list.map((p) => `<button class="album-cell" data-photo="${p.id}" aria-label="Voir la photo">${photoImg(p)}${p.note ? `<span class="album-note">${esc(p.note)}</span>` : ""}</button>`).join("");
+  function memTabs(cur) {
+    return `<div class="seg house-tabs"><button data-go="#/souvenirs" aria-pressed="${cur === "cal"}">📅 Calendrier</button><button data-go="#/albums" aria-pressed="${cur === "albums"}">📚 Albums</button></div>`;
+  }
+  // Profil choisi pour les photos envoyées : l'enfant filtré, sinon le premier enfant
+  const uploadTarget = () => state.filter !== "all" && childById(state.filter) ? state.filter : (state.children.find((c) => !isAdult(c)) || state.children[0] || {}).id;
+  function uploadPicker(attr, val) {
+    const target = uploadTarget();
+    if (!target) return `<p class="muted small">Ajoute d'abord un membre dans l'onglet Famille.</p>`;
+    return `${state.children.length > 1 ? `<div class="seg" style="margin:4px 0 10px">${state.children.map((c) => `<button data-up-child="${c.id}" aria-pressed="${c.id === target}">${esc(c.emoji)} ${esc(c.first_name)}</button>`).join("")}</div>` : ""}
+      <label class="btn block file-tap" style="text-align:center">📷 Ajouter des photos<input type="file" accept="image/*" multiple ${attr}="${val}" hidden></label>`;
+  }
+  function viewMemories(monthKey) {
+    const now = new Date();
+    const [y, m] = (monthKey && /^\d{4}-\d{2}$/.test(monthKey) ? monthKey : ymd(now).slice(0, 7)).split("-").map(Number);
+    const first = new Date(y, m - 1, 1), last = new Date(y, m, 0);
+    const prev = ymd(new Date(y, m - 2, 1)).slice(0, 7), next = ymd(new Date(y, m, 1)).slice(0, 7);
+    const isFuture = new Date(y, m, 1) > now;
+    let html = `<button class="back" onclick="location.hash='#/enfants'">‹ Famille</button>
+      <header class="top"><h1>Souvenirs</h1></header>${memTabs("cal")}${chipsHtml(false)}
+      <div class="cal-head"><button class="btn ghost" data-go="#/souvenirs/${prev}" aria-label="Mois précédent">‹</button>
+        <strong>${MONTHS[m - 1].charAt(0).toUpperCase() + MONTHS[m - 1].slice(1)} ${y}</strong>
+        <button class="btn ghost" data-go="#/souvenirs/${next}" aria-label="Mois suivant" ${isFuture ? "disabled" : ""}>›</button></div>
+      <div class="cal-grid">${DAY_LETTER.map((l) => `<span class="cal-dow">${l}</span>`).join("")}`;
+    for (let i = 1; i < isoDow(first); i++) html += `<span></span>`;
+    const today = ymd(now);
+    let total = 0;
+    for (let d = 1; d <= last.getDate(); d++) {
+      const day = ymd(new Date(y, m - 1, d)), ph = photosOfDay(day), note = dayNote(day);
+      total += ph.length;
+      const cover = ph[0] && state.photoUrls[ph[0].path];
+      html += `<button class="cal-day ${cover ? "has" : ""} ${day === today ? "today" : ""}" data-go="#/jour/${day}" ${day > today ? "disabled" : ""} ${cover ? `style="background-image:url('${esc(cover)}')"` : ""} aria-label="${d} ${MONTHS[m - 1]}${ph.length ? ", " + ph.length + " photo" + (ph.length > 1 ? "s" : "") : ""}">
+        <span class="cd-n">${d}</span>${ph.length > 1 ? `<span class="cd-c">${ph.length}</span>` : ""}${note ? `<span class="cd-note" aria-hidden="true">📝</span>` : ""}</button>`;
+    }
+    html += `</div><p class="muted small" style="text-align:center">${total ? `${total} photo${total > 1 ? "s" : ""} ce mois-ci · ` : ""}Touche un jour pour voir ses photos et écrire le mot du jour.</p>
+      <p class="muted small" style="text-align:center">${state.photos.length} / 500 photos utilisées par ta tribu</p>`;
+    return html;
+  }
+  function viewDay(day) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "")) day = ymd(new Date());
+    const d = parseYmd(day), today = ymd(new Date());
+    const label = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+    const prevD = new Date(d); prevD.setDate(d.getDate() - 1); const nextD = new Date(d); nextD.setDate(d.getDate() + 1);
+    const ph = photosOfDay(day), note = dayNote(day);
+    const ages = state.children.filter((c) => !isAdult(c) && c.birth_date && c.birth_date <= day).map((c) => `${esc(c.first_name)} : ${esc(age(c.birth_date, d) || "naissance")}`);
+    return `<button class="back" onclick="location.hash='#/souvenirs/${day.slice(0, 7)}'">‹ ${MONTHS[d.getMonth()]} ${d.getFullYear()}</button>
+      <div class="cal-head"><button class="btn ghost" data-go="#/jour/${ymd(prevD)}" aria-label="Jour précédent">‹</button>
+        <h1 style="margin:0;font-size:1.5rem;text-align:center">${label.charAt(0).toUpperCase() + label.slice(1)}</h1>
+        <button class="btn ghost" data-go="#/jour/${ymd(nextD)}" aria-label="Jour suivant" ${ymd(nextD) > today ? "disabled" : ""}>›</button></div>
+      ${ages.length ? `<p class="muted small" style="text-align:center;margin-top:0">${ages.join(" · ")}</p>` : ""}
+      <div class="card"><label for="dn" style="margin-top:0">📝 Le mot du jour</label>
+        <textarea id="dn" maxlength="3000" rows="3" placeholder="Ce qui s'est passé aujourd'hui : un premier sourire, une sortie, un fou rire...">${esc(note ? note.text : "")}</textarea>
+        <button class="btn ghost block" id="dn-save" style="margin-top:10px" data-day="${day}">Enregistrer</button></div>
+      ${chipsHtml(false)}
+      ${ph.length ? `<div class="album">${photoGrid(ph)}</div>` : `<p class="muted small">Aucune photo ce jour-là${state.filter !== "all" ? " pour ce profil" : ""}.</p>`}
+      <div style="margin-top:14px">${uploadPicker("data-day-input", day)}</div>`;
+  }
+  function viewAlbums() {
+    const albums = state.albums || [];
+    let html = `<button class="back" onclick="location.hash='#/enfants'">‹ Famille</button>
+      <header class="top"><h1>Souvenirs</h1></header>${memTabs("albums")}
+      <button class="btn block" data-album-new style="margin-bottom:14px">+ Nouvel album</button>`;
+    if (!albums.length) return html + `<div class="empty"><strong>Aucun album pour l'instant</strong><br>Regroupe tes photos par thème : vacances à la mer, premier Noël, anniversaire de Tom...</div>`;
+    html += `<div class="albums">${albums.map((a) => {
+      const ids = (state.albumPhotos || []).filter((x) => x.album_id === a.id).map((x) => x.photo_id);
+      const cover = state.photos.find((p) => ids.includes(p.id));
+      return `<button class="album-card" data-go="#/album/${a.id}"><span class="ac-cover">${cover ? photoImg(cover) : `<span class="ac-emo">${esc(a.emoji)}</span>`}</span>
+        <span class="ac-t">${esc(a.emoji)} ${esc(a.name)}</span><span class="muted small">${ids.length} photo${ids.length > 1 ? "s" : ""}</span></button>`;
+    }).join("")}</div>`;
+    return html;
+  }
+  function viewAlbum(id) {
+    const a = (state.albums || []).find((x) => x.id === id);
+    if (!a) { location.hash = "#/albums"; return ""; }
+    const ids = (state.albumPhotos || []).filter((x) => x.album_id === id).map((x) => x.photo_id);
+    const list = state.photos.filter((p) => ids.includes(p.id)).sort((p, q) => p.taken_on.localeCompare(q.taken_on));
+    return `<button class="back" onclick="location.hash='#/albums'">‹ Albums</button>
+      <header class="top"><h1>${esc(a.emoji)} ${esc(a.name)}</h1></header>
+      <p class="muted small" style="margin-top:0">${list.length} photo${list.length > 1 ? "s" : ""}${list.length ? " · du " + parseYmd(list[0].taken_on).toLocaleDateString("fr-FR") + " au " + parseYmd(list[list.length - 1].taken_on).toLocaleDateString("fr-FR") : ""}</p>
+      <div class="row" style="margin-bottom:12px"><button class="btn" data-album-pick="${id}">+ Photos déjà dans Tribu</button><button class="btn ghost" data-album-edit="${id}">Modifier</button></div>
+      ${list.length ? `<div class="album">${photoGrid(list)}</div>` : `<p class="muted small">Ajoute des photos déjà envoyées, ou de nouvelles depuis ton téléphone.</p>`}
+      <div style="margin-top:14px">${uploadPicker("data-albumup-input", id)}</div>`;
+  }
+  function albumForm(a) {
+    const EMOS = ["📸", "🏖️", "🎄", "🎂", "👶", "🏔️", "🌸", "⚽", "🎒", "❤️", "🐾", "✈️"];
+    let emoji = a ? a.emoji : "📸";
+    openSheet(`<h2 style="margin-top:0">${a ? "Modifier l'album" : "Nouvel album"}</h2><form id="af2">
+      <label for="af2-n">Nom</label><input id="af2-n" required maxlength="60" value="${esc(a ? a.name : "")}" placeholder="Ex : Vacances en Bretagne">
+      <div class="seg emoji-seg" id="af2-e" style="margin-top:10px">${EMOS.map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
+      <div class="actions">${a ? `<button type="button" class="btn danger" id="af2-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="af2-x">Annuler</button>`}<button class="btn" type="submit">Enregistrer</button></div></form>`, (el) => {
+      el.querySelector("#af2-e").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; emoji = b.dataset.v; el.querySelectorAll("#af2-e button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
+      const x = el.querySelector("#af2-x"); if (x) x.onclick = closeSheet;
+      const del = el.querySelector("#af2-del");
+      if (del) del.onclick = async () => { if (!confirm("Supprimer l'album ? Les photos restent dans le calendrier.")) return; await sb.from("albums").delete().eq("id", a.id); closeSheet(); await loadAll(); location.hash = "#/albums"; toast("Album supprimé"); };
+      el.querySelector("#af2").onsubmit = async (e) => {
+        e.preventDefault();
+        const row = { name: el.querySelector("#af2-n").value.trim(), emoji };
+        const res = a ? await sb.from("albums").update(row).eq("id", a.id).select().single()
+          : await sb.from("albums").insert({ ...row, household_id: state.household.id, created_by: state.session.user.id }).select().single();
+        if (res.error) return toast(errMsg(res.error));
+        closeSheet(); await loadAll();
+        if (a) render(); else location.hash = "#/album/" + res.data.id;
+        toast(a ? "Album modifié" : "Album créé");
+      };
+    });
+  }
+  function albumPickSheet(albumId) {
+    const inAlb = new Set((state.albumPhotos || []).filter((x) => x.album_id === albumId).map((x) => x.photo_id));
+    const sel = new Set();
+    const list = state.photos.filter((p) => !inAlb.has(p.id)).sort((p, q) => q.taken_on.localeCompare(p.taken_on));
+    if (!list.length) return toast("Toutes tes photos sont déjà dans cet album");
+    openSheet(`<h2 style="margin-top:0">Ajouter à l'album</h2>
+      <p class="muted small" style="margin-top:0">Touche les photos à ajouter.</p>
+      <div class="album pick-grid">${list.map((p) => `<button class="album-cell" data-sel="${p.id}" aria-pressed="false">${photoImg(p)}<span class="pick-check" aria-hidden="true">✓</span></button>`).join("")}</div>
+      <div class="actions"><button type="button" class="btn ghost" id="ap-x">Annuler</button><button class="btn" id="ap-ok">Ajouter</button></div>`, (el) => {
+      el.querySelectorAll("[data-sel]").forEach((b) => b.onclick = () => { const id = b.dataset.sel; sel.has(id) ? sel.delete(id) : sel.add(id); b.setAttribute("aria-pressed", sel.has(id)); el.querySelector("#ap-ok").textContent = sel.size ? `Ajouter ${sel.size} photo${sel.size > 1 ? "s" : ""}` : "Ajouter"; });
+      el.querySelector("#ap-x").onclick = closeSheet;
+      el.querySelector("#ap-ok").onclick = async () => {
+        if (!sel.size) return closeSheet();
+        const { error } = await sb.from("album_photos").insert([...sel].map((pid) => ({ album_id: albumId, photo_id: pid, household_id: state.household.id })));
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast("Photos ajoutées à l'album");
+      };
+    });
+  }
+  // Date de prise de vue lue dans la photo (EXIF), pour la ranger au bon jour du calendrier
+  async function exifDate(file) {
+    try {
+      const buf = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+      if (buf.byteLength < 4 || buf.getUint16(0) !== 0xFFD8) return null;
+      let off = 2;
+      while (off + 10 < buf.byteLength) {
+        const marker = buf.getUint16(off), size = buf.getUint16(off + 2);
+        if (marker === 0xFFE1 && buf.getUint32(off + 4) === 0x45786966) {
+          const t = off + 10, le = buf.getUint16(t) === 0x4949;
+          const u16 = (o) => buf.getUint16(t + o, le), u32 = (o) => buf.getUint32(t + o, le);
+          const find = (o, tags) => { const n = u16(o); for (let i = 0; i < n; i++) { const e = o + 2 + i * 12; if (tags.includes(u16(e))) return u32(e + 8); } return null; };
+          const ifd0 = u32(4), exif = find(ifd0, [0x8769]);
+          const at = (exif && find(exif, [0x9003])) || find(ifd0, [0x0132]);
+          if (!at) return null;
+          let s = ""; for (let i = 0; i < 10; i++) s += String.fromCharCode(buf.getUint8(t + at + i));
+          const m = /^(\d{4}):(\d{2}):(\d{2})$/.exec(s);
+          return m && m[1] > "1990" ? `${m[1]}-${m[2]}-${m[3]}` : null;
+        }
+        if ((marker & 0xFF00) !== 0xFF00) break;
+        off += 2 + size;
+      }
+    } catch (_) {}
+    return null;
+  }
+  function memoriesHomeHtml() {
+    // "Ce jour-là" : les photos prises à la même date les années précédentes
+    const md = ymd(new Date()).slice(5);
+    const old = state.photos.filter((p) => p.taken_on.slice(5) === md && p.taken_on < ymd(new Date()));
+    if (!old.length) return "";
+    const years = [...new Set(old.map((p) => p.taken_on.slice(0, 4)))].sort().reverse();
+    return `<h2>✨ Ce jour-là</h2>${years.map((yy) => { const n = new Date().getFullYear() - Number(yy); const ph = old.filter((p) => p.taken_on.startsWith(yy));
+      return `<button class="card memory" data-go="#/jour/${yy}-${md}"><span class="mem-imgs">${ph.slice(0, 3).map(photoImg).join("")}</span><span><strong>Il y a ${n} an${n > 1 ? "s" : ""}</strong><br><span class="muted small">${ph.length} photo${ph.length > 1 ? "s" : ""} ›</span></span></button>`; }).join("")}`;
+  }
+  function bindMemories() {
+    $app.querySelectorAll("[data-up-child]").forEach((b) => b.onclick = () => { state.filter = b.dataset.upChild; render(); });
+    $app.querySelectorAll("[data-day-input]").forEach((inp) => inp.onchange = () => { uploadAlbum(uploadTarget(), inp.files, { day: inp.dataset.dayInput }).finally(() => { inp.value = ""; }); });
+    $app.querySelectorAll("[data-albumup-input]").forEach((inp) => inp.onchange = () => { uploadAlbum(uploadTarget(), inp.files, { albumId: inp.dataset.albumupInput }).finally(() => { inp.value = ""; }); });
+    $app.querySelectorAll("[data-album-new]").forEach((b) => b.onclick = () => albumForm());
+    $app.querySelectorAll("[data-album-edit]").forEach((b) => b.onclick = () => albumForm((state.albums || []).find((a) => a.id === b.dataset.albumEdit)));
+    $app.querySelectorAll("[data-album-pick]").forEach((b) => b.onclick = () => albumPickSheet(b.dataset.albumPick));
+    $app.querySelectorAll("[data-mem-child]").forEach((b) => b.onclick = () => { state.filter = b.dataset.memChild; location.hash = "#/souvenirs"; });
+    const ds = document.getElementById("dn-save");
+    if (ds) ds.onclick = async () => {
+      const text = document.getElementById("dn").value.trim(), day = ds.dataset.day;
+      const { error } = text
+        ? await sb.from("day_notes").upsert({ household_id: state.household.id, day, text, updated_by: state.session.user.id, updated_at: new Date().toISOString() })
+        : await sb.from("day_notes").delete().eq("household_id", state.household.id).eq("day", day);
+      if (error) return toast(errMsg(error));
+      await loadAll(); render(); toast(text ? "Mot du jour enregistré" : "Mot du jour effacé");
+    };
   }
 
   // ---------- Boot ----------

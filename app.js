@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 41;
+  const TRIBU_VERSION = 42;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];

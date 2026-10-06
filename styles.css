@@ -366,14 +366,20 @@ html:has(#app > .nav), html:has(#app > .nav) body { height: 100%; overflow: hidd
 #app:has(> .nav) > .fab { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
 
 /* Nouveautés et idées */
-.news-entry { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.news-entry { display: flex; align-items: center; gap: 14px; cursor: pointer; margin: 16px 0; padding: 18px; }
 .news-entry > span:nth-child(2) { flex: 1; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); vertical-align: middle; }
 .nav a { position: relative; }
 .nav-dot { position: absolute; top: 7px; left: calc(50% + 9px); }
-.news-head { display: flex; align-items: center; gap: 12px; }
-.news-emo { font-size: 1.6rem; flex: none; }
-.idea { display: flex; gap: 12px; align-items: flex-start; }
+.news-head { display: flex; align-items: flex-start; gap: 14px; }
+.news-t { flex: 1; min-width: 0; line-height: 1.35; }
+.news-t strong { font-size: 1.05rem; }
+.card.news { padding: 18px 18px 16px; margin: 0 0 16px; }
+.news-body { margin: 12px 0 0; line-height: 1.6; white-space: pre-line; font-size: .95rem; }
+.news-admin { text-align: right; margin-top: 8px; }
+.news-admin .link { padding: 4px 0; }
+.news-emo { font-size: 1.7rem; flex: none; line-height: 1.2; }
+.idea { display: flex; gap: 14px; align-items: flex-start; padding: 16px 18px; margin: 0 0 14px; }
 .idea-body { flex: 1; min-width: 0; }
 .vote { flex: none; display: flex; flex-direction: column; align-items: center; min-width: 52px; padding: 6px 4px; border-radius: var(--radius-sm); border: 1.5px solid var(--line); background: var(--bg); font: inherit; font-weight: 700; color: inherit; cursor: pointer; }
 .vote.on { border-color: var(--accent); background: var(--surface); }

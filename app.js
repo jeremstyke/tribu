@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 40;
+  const TRIBU_VERSION = 41;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -2880,10 +2880,10 @@
     return `<button class="back" onclick="location.hash='#/reglages'">‹ ${state.mode === "pro" ? "Réglages" : "Tribu"}</button>
       <header class="top"><h1>Nouveautés</h1></header>
       ${state.isAdmin ? `<button class="btn ghost block" id="news-add" style="margin-bottom:14px">✏️ Publier une nouveauté</button>` : ""}
-      ${(state.news || []).map((n) => `<div class="card news">
-        <div class="news-head"><span class="news-emo" aria-hidden="true">${esc(n.emoji)}</span><div><strong>${esc(n.title)}</strong><div class="muted small">${day(n.created_at)}</div></div>
-        ${state.isAdmin ? `<button class="link small" style="padding:0;margin-left:auto" data-news-del="${n.id}">Supprimer</button>` : ""}</div>
-        ${n.body ? `<p class="small" style="margin:8px 0 0;white-space:pre-line">${esc(n.body)}</p>` : ""}</div>`).join("") || `<p class="muted">Rien pour l'instant.</p>`}
+      ${(state.news || []).map((n) => `<article class="card news">
+        <div class="news-head"><span class="news-emo" aria-hidden="true">${esc(n.emoji)}</span><div class="news-t"><strong>${esc(n.title)}</strong><div class="muted small">${day(n.created_at)}</div></div></div>
+        ${n.body ? `<p class="news-body">${esc(n.body)}</p>` : ""}
+        ${state.isAdmin ? `<div class="news-admin"><button class="link small" data-news-del="${n.id}">Supprimer</button></div>` : ""}</article>`).join("") || `<p class="muted">Rien pour l'instant.</p>`}
       <h2>💡 Boîte à idées</h2>
       <p class="muted small" style="margin-top:0">Propose ce qui te manque, et vote pour les idées des autres. Les plus demandées passent en premier.</p>
       <button class="btn block" id="idea-add">Proposer une idée</button>

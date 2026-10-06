@@ -19,7 +19,7 @@
 
   const state = {
     session: null, household: null, me: null, members: [], memberships: [], passkeys: [], pushOn: false, notif: null,
-    children: [], items: [], shopping: [], photos: [], logs: [], activities: [],
+    children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [],
     filter: "all", channel: null, photoUrls: {}
   };
 
@@ -126,13 +126,14 @@
   async function loadAll() {
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
-    const [c, i, s, ph, lg, ac] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
       sb.from("photos").select("*").eq("household_id", hid).order("taken_on", { ascending: false }).order("created_at", { ascending: false }),
       sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000),
-      sb.from("activities").select("*").eq("household_id", hid).order("start_time")
+      sb.from("activities").select("*").eq("household_id", hid).order("start_time"),
+      sb.from("treatments").select("*").eq("household_id", hid).order("created_at")
     ]);
     state.children = (c.data || []).sort((a, b) => (a.kind === "adulte") - (b.kind === "adulte"));
     state.items = i.data || [];
@@ -140,6 +141,7 @@
     state.photos = ph.data || [];
     state.logs = lg.data || [];
     state.activities = ac.data || [];
+    state.treatments = tr.data || [];
     await loadPhotoUrls();
   }
 
@@ -220,7 +222,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -564,6 +566,12 @@
       </section>`;
     });
 
+    const doses = dosesToday((t) => state.filter === "all" || t.child_id === state.filter);
+    if (doses.length) {
+      const left = doses.filter((d) => !d.log).length;
+      html += `<section class="day"><div class="day-title">💊 Traitements du jour <span class="muted small">${left ? left + " à donner" : "tout est donné ✓"}</span></div>${doses.map((d) => doseRow(d)).join("")}</section>`;
+    }
+
     if (!state.children.length) {
       html += `<div class="empty"><strong>Ajoute ton premier enfant</strong><br>Chaque enfant a sa couleur : ses rendez-vous, tâches et infos santé apparaîtront ici.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
     }
@@ -618,6 +626,17 @@
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
+    const trts = state.treatments.filter((t) => t.child_id === id);
+    const today = ymd(new Date());
+    const cur = trts.filter((t) => !t.end_date || t.end_date >= today), past = trts.filter((t) => t.end_date && t.end_date < today);
+    const dz = dosesToday((t) => t.child_id === id);
+    html += `<h2>💊 Traitements</h2>
+      ${dz.length ? dz.map((d) => doseRow(d, false)).join("") : ""}
+      ${cur.map((t) => `<div class="item" style="--c:${esc(c.color)}"><div class="tab"></div><div class="body" data-trt="${t.id}" role="button" tabindex="0">
+        <div class="line1"><span class="title">${esc(t.name)}${t.dose ? " · " + esc(t.dose) : ""}</span></div>
+        <div class="meta">${esc(trtSchedule(t))}${t.start_date > today ? " · commence le " + parseYmd(t.start_date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : ""}</div></div></div>`).join("")}
+      ${past.length ? `<p class="muted small">Terminés : ${past.map((t) => `<button class="link small" style="padding:0" data-trt="${t.id}">${esc(t.name)}</button>`).join(", ")}</p>` : ""}
+      <button class="btn ghost block" data-trt-add="${c.id}">Ajouter un traitement</button>`;
     const acts = state.activities.filter((a) => a.child_id === id);
     html += `<h2>🎯 Activités</h2>
       ${acts.map((a) => `<div class="item" style="--c:${esc(c.color)}"><div class="tab"></div><div class="body" data-act="${a.id}" role="button" tabindex="0">
@@ -706,7 +725,7 @@
         <button class="btn ghost block" style="margin-top:10px" id="export-data">Exporter mes données</button>
         <button class="btn danger block" style="margin-top:10px" id="delete-account">Supprimer mon compte</button>
       </div>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 15</p>`;
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 16</p>`;
   }
 
   // ---------- Notifications ----------
@@ -1024,7 +1043,9 @@
   function logPicker(c) {
     openSheet(`<h2 style="margin-top:0">${esc(c.first_name)} : noter</h2>${quickGrid(c)}
       <button class="btn ghost block" style="margin-top:14px" id="lp-item">📅 Rendez-vous, tâche ou note</button>
-      <button class="btn ghost block" style="margin-top:10px" id="lp-act">🎯 Activité régulière</button>`, (el) => {
+      <button class="btn ghost block" style="margin-top:10px" id="lp-act">🎯 Activité régulière</button>
+      <button class="btn ghost block" style="margin-top:10px" id="lp-trt">💊 Traitement régulier</button>`, (el) => {
+      el.querySelector("#lp-trt").onclick = () => treatmentForm(c.id);
       el.querySelector("#lp-act").onclick = () => activityForm(c.id);
       el.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => logForm(c, b.dataset.log));
       el.querySelector("#lp-item").onclick = () => itemForm(null, { child_id: c.id });
@@ -1255,6 +1276,153 @@
           : await sb.from("activities").insert({ ...row, household_id: state.household.id, child_id: child.id });
         if (error) return fail(errMsg(error));
         closeSheet(); await loadAll(); render(); toast(a ? "Activité modifiée" : "Activité ajoutée");
+      };
+    });
+  }
+
+  // ---------- Traitements réguliers ----------
+  const TIME_PRESETS = [["08:00", "Matin"], ["12:00", "Midi"], ["16:00", "Goûter"], ["20:00", "Soir"]];
+  function trtActiveOn(t, dateStr) {
+    if (t.start_date > dateStr) return false;
+    if (t.end_date && t.end_date < dateStr) return false;
+    if (t.weekdays && t.weekdays.length && !t.weekdays.map(Number).includes(isoDow(parseYmd(dateStr)))) return false;
+    return true;
+  }
+  function dosesToday(filterFn) {
+    const today = ymd(new Date());
+    const out = [];
+    state.treatments.filter((t) => trtActiveOn(t, today) && (!filterFn || filterFn(t))).forEach((t) => {
+      [...t.times].sort().forEach((slot) => {
+        const log = state.logs.find((l) => l.kind === "medicament" && l.data && l.data.treatment_id === t.id && l.data.date === today && l.data.slot === slot);
+        out.push({ t, slot, log, at: atTime(today, slot) });
+      });
+    });
+    return out.sort((a, b) => a.slot.localeCompare(b.slot));
+  }
+  function doseRow(d, showWho = true) {
+    const c = childById(d.t.child_id);
+    const late = !d.log && Date.now() - d.at > 30 * 60000;
+    const by = d.log && d.log.created_by ? memberName(d.log.created_by) : "";
+    return `<div class="item ${d.log ? "done" : ""}" style="--c:${esc(c ? c.color : "var(--ink-soft)")}">
+      <div class="tab"></div>
+      <div class="body" data-trt="${d.t.id}" role="button" tabindex="0">
+        <div class="line1"><span class="time" ${late ? 'style="color:var(--danger)"' : ""}>${d.slot}</span><span class="title">💊 ${esc(d.t.name)}${d.t.dose ? " · " + esc(d.t.dose) : ""}</span></div>
+        <div class="meta">${showWho && c ? esc(c.first_name) + " · " : ""}${d.log ? `Donné à ${fmtTime(d.log.at)}${by ? " par " + esc(by) : ""}` : late ? "Pas encore donné" : "À donner"}${d.t.notes ? " · " + esc(d.t.notes) : ""}</div>
+      </div>
+      <button class="check" data-dose="${d.t.id}|${d.slot}" aria-label="${d.log ? "Annuler la prise" : "Marquer comme donné"}"><i>${d.log ? "✓" : ""}</i></button>
+    </div>`;
+  }
+  async function toggleDose(tid, slot) {
+    const t = state.treatments.find((x) => x.id === tid); if (!t) return;
+    const today = ymd(new Date());
+    const log = state.logs.find((l) => l.kind === "medicament" && l.data && l.data.treatment_id === tid && l.data.date === today && l.data.slot === slot);
+    if (log) {
+      if (!confirm(`Annuler la prise de ${slot} (${t.name}) ?`)) return;
+      await sb.from("logs").delete().eq("id", log.id);
+    } else {
+      const { error } = await sb.from("logs").insert({
+        household_id: state.household.id, child_id: t.child_id, kind: "medicament", at: new Date().toISOString(),
+        data: { name: t.name, dose: t.dose || undefined, treatment_id: t.id, slot, date: today }, created_by: state.session.user.id
+      });
+      if (error) return toast(errMsg(error));
+      toast(`${t.name} noté comme donné`);
+    }
+    await loadAll(); render();
+  }
+  const trtSchedule = (t) => {
+    const days = t.weekdays && t.weekdays.length ? [...t.weekdays].sort().map((n) => DAY_SHORT[n - 1]).join(", ") : "tous les jours";
+    const until = t.end_date ? ` · jusqu'au ${parseYmd(t.end_date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}` : " · en continu";
+    return `${[...t.times].sort().join(", ")} · ${days}${until}`;
+  };
+
+  function treatmentForm(childId, t) {
+    const child = childById(childId);
+    const today = ymd(new Date());
+    const meds = [...new Set([...state.treatments.map((x) => x.name), ...state.logs.filter((l) => l.kind === "medicament" && l.data && l.data.name).map((l) => l.data.name)])];
+    let times = t ? [...t.times].sort() : ["08:00", "20:00"];
+    let days = new Set(t && t.weekdays ? t.weekdays.map(Number) : []);
+    let freq = days.size ? "jours" : "tous";
+    const addDays = (n) => { const d = parseYmd(today); d.setDate(d.getDate() + n - 1); return ymd(d); };
+    openSheet(`
+      <h2 style="margin-top:0">${t ? "Modifier le traitement" : "Traitement"} · ${esc(child.first_name)}</h2>
+      <form id="tf">
+        <label for="tf-name">Médicament</label>
+        <input id="tf-name" list="tf-meds" required maxlength="80" value="${esc(t ? t.name : "")}" placeholder="Ex : Amoxicilline, Vitamine D">
+        <datalist id="tf-meds">${meds.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
+        <label for="tf-dose">Dose</label>
+        <input id="tf-dose" maxlength="60" value="${esc(t && t.dose ? t.dose : "")}" placeholder="Ex : 5 ml, 1 comprimé, 2 gouttes">
+        <p class="muted small" style="margin:6px 0 0">Indique la dose prescrite par le médecin ou le pharmacien.</p>
+        <label>Heures de prise</label>
+        <div id="tf-times"></div>
+        <div class="seg" style="margin-top:8px">${TIME_PRESETS.map(([h, l]) => `<button type="button" data-preset="${h}">+ ${l} ${h}</button>`).join("")}<button type="button" data-preset="custom">+ Autre heure</button></div>
+        <label>Fréquence</label>
+        <div class="seg" id="tf-freq">${[["tous", "Tous les jours"], ["jours", "Certains jours"]].map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${k === freq}">${l}</button>`).join("")}</div>
+        <div class="days" id="tf-days" style="margin-top:10px" ${freq === "tous" ? "hidden" : ""}>${DAY_LETTER.map((l, i) => `<button type="button" data-v="${i + 1}" aria-pressed="${days.has(i + 1)}" aria-label="${DAY_SHORT[i]}">${l}</button>`).join("")}</div>
+        <div class="row">
+          <div><label for="tf-from">Début</label><input id="tf-from" type="date" required value="${esc(t ? t.start_date : today)}"></div>
+          <div><label for="tf-to">Fin</label><input id="tf-to" type="date" value="${esc(t && t.end_date ? t.end_date : "")}"></div>
+        </div>
+        <div class="seg" style="margin-top:8px">${[3, 5, 7, 10].map((n) => `<button type="button" data-dur="${n}">${n} jours</button>`).join("")}<button type="button" data-dur="0">En continu</button></div>
+        <label for="tf-notes">Consignes</label>
+        <input id="tf-notes" maxlength="500" value="${esc(t && t.notes ? t.notes : "")}" placeholder="Ex : pendant le repas, bien agiter">
+        <div id="tf-err" class="error" hidden></div>
+        <div class="actions">
+          ${t ? `<button type="button" class="btn danger" id="tf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="tf-cancel">Annuler</button>`}
+          <button class="btn" type="submit">${t ? "Enregistrer" : "Ajouter"}</button>
+        </div>
+      </form>`, (el) => {
+      const wrap = el.querySelector("#tf-times");
+      const drawTimes = () => {
+        wrap.innerHTML = times.map((h, i) => `<div class="time-row"><input type="time" data-ti="${i}" value="${h}" required><button type="button" class="del" data-tr="${i}" aria-label="Retirer ${h}">×</button></div>`).join("") || `<p class="muted small">Ajoute au moins une heure.</p>`;
+        wrap.querySelectorAll("[data-ti]").forEach((n) => n.onchange = () => { times[n.dataset.ti] = n.value; });
+        wrap.querySelectorAll("[data-tr]").forEach((b) => b.onclick = () => { times.splice(Number(b.dataset.tr), 1); drawTimes(); });
+      };
+      drawTimes();
+      el.querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => {
+        const h = b.dataset.preset === "custom" ? "" : b.dataset.preset;
+        if (h && times.includes(h)) return;
+        if (times.length >= 8) return toast("8 prises par jour maximum");
+        times.push(h || "12:00"); times.sort(); drawTimes();
+      });
+      el.querySelector("#tf-freq").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return; freq = b.dataset.v;
+        el.querySelectorAll("#tf-freq button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        el.querySelector("#tf-days").hidden = freq === "tous";
+      });
+      el.querySelector("#tf-days").addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return; const n = Number(b.dataset.v);
+        days.has(n) ? days.delete(n) : days.add(n); b.setAttribute("aria-pressed", days.has(n));
+      });
+      el.querySelectorAll("[data-dur]").forEach((b) => b.onclick = () => {
+        const n = Number(b.dataset.dur);
+        const from = el.querySelector("#tf-from").value || today;
+        if (!n) { el.querySelector("#tf-to").value = ""; return; }
+        const d = parseYmd(from); d.setDate(d.getDate() + n - 1); el.querySelector("#tf-to").value = ymd(d);
+      });
+      const cancel = el.querySelector("#tf-cancel"); if (cancel) cancel.onclick = closeSheet;
+      const del = el.querySelector("#tf-del");
+      if (del) del.onclick = async () => {
+        if (!confirm(`Supprimer le traitement ${t.name} ? Les prises déjà notées restent dans le journal.`)) return;
+        await sb.from("treatments").delete().eq("id", t.id);
+        closeSheet(); await loadAll(); render(); toast("Traitement supprimé");
+      };
+      el.querySelector("#tf").onsubmit = async (e) => {
+        e.preventDefault();
+        const err = el.querySelector("#tf-err"); err.hidden = true;
+        const fail = (m) => { err.hidden = false; err.textContent = m; };
+        wrap.querySelectorAll("[data-ti]").forEach((n) => { times[n.dataset.ti] = n.value; });
+        const clean = [...new Set(times.filter(Boolean).map((h) => h.slice(0, 5)))].sort();
+        const v = (id) => el.querySelector(id).value.trim();
+        if (!v("#tf-name")) return fail("Indique le médicament.");
+        if (!clean.length) return fail("Ajoute au moins une heure de prise.");
+        if (freq === "jours" && !days.size) return fail("Choisis au moins un jour.");
+        if (v("#tf-to") && v("#tf-to") < v("#tf-from")) return fail("La date de fin doit être après le début.");
+        const row = { name: v("#tf-name"), dose: v("#tf-dose") || null, times: clean, weekdays: freq === "jours" ? [...days].sort() : null, start_date: v("#tf-from"), end_date: v("#tf-to") || null, notes: v("#tf-notes") || null };
+        const { error } = t
+          ? await sb.from("treatments").update(row).eq("id", t.id)
+          : await sb.from("treatments").insert({ ...row, household_id: state.household.id, child_id: child.id });
+        if (error) return fail(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(t ? "Traitement modifié" : "Traitement ajouté, avec rappels à chaque prise");
       };
     });
   }
@@ -1568,6 +1736,12 @@
       await sb.from("items").update({ done: it.done }).eq("id", it.id);
     });
     const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-trt-add]").forEach((b) => b.onclick = () => treatmentForm(b.dataset.trtAdd));
+    $app.querySelectorAll("[data-trt]").forEach((b) => {
+      const open = () => { const t = state.treatments.find((x) => x.id === b.dataset.trt); if (t) treatmentForm(t.child_id, t); };
+      b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); };
+    });
+    $app.querySelectorAll("[data-dose]").forEach((b) => b.onclick = () => { const [tid, slot] = b.dataset.dose.split("|"); toggleDose(tid, slot); });
     $app.querySelectorAll("[data-add-profile]").forEach((b) => b.onclick = () => childForm(null, b.dataset.addProfile));
     $app.querySelectorAll("[data-act-add]").forEach((b) => b.onclick = () => activityForm(b.dataset.actAdd));
     $app.querySelectorAll("[data-act]").forEach((b) => {
@@ -1725,7 +1899,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
       return render();
     }
     if (!booted || prev !== session.user.id) {

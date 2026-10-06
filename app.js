@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 22;
+  const TRIBU_VERSION = 23;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -21,7 +21,8 @@
   const state = {
     session: null, household: null, me: null, members: [], memberships: [], passkeys: [], pushOn: false, notif: null,
     children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [],
-    filter: "all", channel: null, photoUrls: {}
+    filter: "all", channel: null, photoUrls: {},
+    mode: "famille", pro: null, proKids: [], presences: [], shares: [], hasFamily: false
   };
 
   // ---------- Utils ----------
@@ -66,20 +67,27 @@
     if (/Password should be/i.test(m)) return "Le mot de passe doit faire au moins 6 caractères.";
     if (/quota photos/i.test(m)) return "L'album de ta tribu est plein (100 photos). Supprime des photos pour en ajouter.";
     if (/beta_full/i.test(m)) return "La bêta est complète : les 100 places sont prises. Rejoins une tribu existante avec un code d'invitation.";
+    if (/pro_full/i.test(m)) return "La bêta pro est complète : les 50 places sont prises.";
+    if (/code pro invalide/i.test(m)) return "Ce code ne correspond à aucune nounou. Vérifie-le avec elle.";
+    if (/not allowed/i.test(m)) return "Tu n'as pas accès à cet enfant.";
     if (/code invalide/i.test(m)) return "Ce code ne correspond à aucune tribu. Vérifie-le.";
     return m || "Une erreur est survenue. Réessaie.";
   };
 
   // ---------- Invitation ----------
-  const INVITE_KEY = "tribu_invite", HID_KEY = "tribu_hid";
+  const INVITE_KEY = "tribu_invite", HID_KEY = "tribu_hid", MODE_KEY = "tribu_mode", WANT_PRO_KEY = "tribu_want_pro", PRO_LINK_KEY = "tribu_pro_link";
   const ls = {
     get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } },
     set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} }
   };
   // Le code du lien est gardé de côté : il survit à la création de compte et à la confirmation d'email.
   (() => {
-    const c = new URLSearchParams(location.search).get("code");
-    if (c) { ls.set(INVITE_KEY, c.trim().toUpperCase().slice(0, 6)); history.replaceState(null, "", location.pathname + location.hash); }
+    const q = new URLSearchParams(location.search);
+    const c = q.get("code"), pc = q.get("pro");
+    if (c) ls.set(INVITE_KEY, c.trim().toUpperCase().slice(0, 6));
+    if (pc) ls.set(PRO_LINK_KEY, pc.trim().toUpperCase().slice(0, 6));
+    if (q.get("espace") === "pro") ls.set(WANT_PRO_KEY, "1");
+    if (c || pc || q.has("espace") || q.has("src")) history.replaceState(null, "", location.pathname + location.hash);
   })();
   const pendingInvite = () => ls.get(INVITE_KEY);
   async function invitePreview(code) {
@@ -111,7 +119,9 @@
     const uid = state.session.user.id;
     const { data: mem } = await sb.from("members").select("household_id, display_name, role, households(name)").eq("user_id", uid).order("created_at");
     state.memberships = mem || [];
-    Promise.all([loadPasskeys(), loadPushState()]).then(() => { if (state.household && ["reglages", "accueil", ""].includes(route()[0] || "")) render(); });
+    state.hasFamily = !!(mem && mem.length);
+    Promise.all([loadPasskeys(), loadPushState()]).then(() => { if ((state.household || state.mode === "pro") && ["reglages", "accueil", ""].includes(route()[0] || "")) render(); });
+    if (state.mode === "pro") return;
     if (!mem || !mem.length) { state.household = null; return; }
     state.me = mem.find((m) => m.household_id === ls.get(HID_KEY)) || mem[0];
     const hid = state.me.household_id;
@@ -128,7 +138,8 @@
   async function loadAll() {
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
-    const [c, i, s, ph, lg, ac, tr, vc] = await Promise.all([
+    const fromDay = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
+    const [c, i, s, ph, lg, ac, tr, vc, sh, pr] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
@@ -136,8 +147,12 @@
       sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000),
       sb.from("activities").select("*").eq("household_id", hid).order("start_time"),
       sb.from("treatments").select("*").eq("household_id", hid).order("created_at"),
-      sb.from("vaccines_done").select("*").eq("household_id", hid)
+      sb.from("vaccines_done").select("*").eq("household_id", hid),
+      sb.from("child_shares").select("*, pros(display_name, kind)").eq("household_id", hid),
+      sb.from("presences").select("*").eq("household_id", hid).gte("day", fromDay).order("arrived_at")
     ]);
+    state.shares = sh.data || [];
+    state.presences = pr.data || [];
     state.children = (c.data || []).sort((a, b) => (a.kind === "adulte") - (b.kind === "adulte"));
     state.items = i.data || [];
     state.shopping = s.data || [];
@@ -224,9 +239,9 @@
     if (state.channel) sb.removeChannel(state.channel);
     const hid = state.household.id;
     let timer;
-    const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { await loadAll(); render(); }, 250); };
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode === "pro") return; await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -254,7 +269,7 @@
           <a class="btn" href="https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent("Tribu, l'organisation de la famille")}" target="_blank" rel="noopener">✈️ Par Telegram</a>
           <button class="btn ghost" id="copy-link">🔗 Copier le lien</button>
         </div>
-        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a> · <a href="guides/" class="link">📚 Guides pour les parents</a></p>
+        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a> · <a href="guides/" class="link">📚 Guides pour les parents</a> · <a href="pro.html" class="link">👩‍🍼 Tribu Pro</a></p>
       </div>`;
     refreshBetaPill();
     document.getElementById("copy-link").onclick = async () => {
@@ -265,7 +280,14 @@
   function render() {
     if (isDesktop()) return renderDesktop();
     if (!state.session) return renderAuth();
-    if (!state.household) return renderOnboarding();
+    if (state.mode === "pro" && state.pro) return renderPro();
+    if (!state.household) return ls.get(WANT_PRO_KEY) && !state.pro ? renderProOnboarding() : renderOnboarding();
+    const pl = ls.get(PRO_LINK_KEY);
+    if (pl && !state.proLinkShown) {
+      state.proLinkShown = true;
+      if (state.pro && state.pro.pro_code === pl) ls.set(PRO_LINK_KEY, null);
+      else setTimeout(() => shareSheet(null, pl), 300);
+    }
     const [page, id] = route();
     let body = "";
     if (page === "enfants") body = viewChildren();
@@ -394,13 +416,14 @@
         <div class="dots" aria-hidden="true">${COLORS.slice(0, 5).map((c) => `<i style="--c:${c}"></i>`).join("")}</div>
         <h1>Tribu <span class="beta">Bêta</span></h1>
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
-        ${invite ? "" : betaPill()}
+        ${invite || ls.get(PRO_LINK_KEY) ? "" : ls.get(WANT_PRO_KEY) ? proPill() : betaPill()}
         <div id="invite-banner"></div>
         ${card}
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
         ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button><br>` : ""}
         <a class="link" href="faq.html" style="display:inline-block">❓ Questions fréquentes</a><br>
-        <a class="link" href="guides/" style="display:inline-block">📚 Guides pour les parents</a>
+        <a class="link" href="guides/" style="display:inline-block">📚 Guides pour les parents</a><br>
+        <a class="link" href="pro.html" style="display:inline-block">👩‍🍼 Assistante maternelle ou nounou ?</a>
       </div>`;
 
     const err = document.getElementById("err");
@@ -408,7 +431,12 @@
     const go = (id, m) => { const b = document.getElementById(id); if (b) b.onclick = () => renderAuth(m); };
     go("go-signup", "signup"); go("go-pwd", "login-pwd"); go("go-signup-pwd", "signup-pwd"); go("go-home", pk ? "home" : "login-pwd"); go("go-home2", "home");
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
-    if (!invite) refreshBetaPill();
+    if (!invite && ls.get(WANT_PRO_KEY)) refreshProPill(); else if (!invite) refreshBetaPill();
+    const plc = ls.get(PRO_LINK_KEY);
+    if (!invite && plc) sb.rpc("pro_preview", { p_code: plc }).then(({ data }) => {
+      const b = document.getElementById("invite-banner"); if (!b || !data) return;
+      b.innerHTML = `<div class="invite-banner"><strong>${esc(data.name)} t'invite à suivre la journée de ton enfant</strong><br>Crée ton compte (ou connecte-toi) : tu verras ses arrivées et départs, repas, siestes et petits mots en direct.</div>`;
+    });
     if (invite) invitePreview(invite).then((pv) => {
       const b = document.getElementById("invite-banner"); if (!b || !pv) return;
       b.innerHTML = `<div class="invite-banner"><strong>${esc(pv.inviter || "Un parent")} t'invite à rejoindre ${esc(pv.household_name)}</strong><br>Crée ton compte (ou connecte-toi) pour retrouver les enfants, les rendez-vous et les courses de la famille.</div>`;
@@ -468,22 +496,22 @@
     return `<span id="beta-pill" class="beta-pill ${b.left ? "" : "full"}">🎟️ Bêta ouverte à ${BETA_LIMIT} familles · ${b.left ? `encore <strong>${b.left}</strong> place${b.left > 1 ? "s" : ""}` : "<strong>complet</strong>"}</span>`;
   };
   const refreshBetaPill = () => betaSpots().then(() => { const el = document.getElementById("beta-pill"); if (el) el.outerHTML = betaPill(); });
-  function waitlistHtml(email) {
+  function waitlistHtml(email, pro = false) {
     return `<div class="card" id="wl">
-      <h3>La bêta est complète</h3>
-      <p class="muted small" style="margin:4px 0 0">Les ${BETA_LIMIT} places de la bêta sont prises. Laisse ton email : tu seras prévenu dès l'ouverture de nouvelles places. Si quelqu'un t'a invité, utilise plutôt son code.</p>
+      <h3>La bêta ${pro ? "pro " : ""}est complète</h3>
+      <p class="muted small" style="margin:4px 0 0">${pro ? `Les ${PRO_LIMIT} places de la bêta pro sont prises. Laisse ton email : tu seras prévenue dès l'ouverture de nouvelles places.` : `Les ${BETA_LIMIT} places de la bêta sont prises. Laisse ton email : tu seras prévenu dès l'ouverture de nouvelles places. Si quelqu'un t'a invité, utilise plutôt son code.`}</p>
       <label for="wl-email">Email</label>
       <input id="wl-email" type="email" autocomplete="email" value="${esc(email || "")}">
       <button class="btn block" style="margin-top:14px" id="wl-go">Me prévenir</button>
     </div>`;
   }
-  function bindWaitlist() {
+  function bindWaitlist(kind = "famille") {
     const b = document.getElementById("wl-go"); if (!b) return;
     b.onclick = async () => {
       const email = document.getElementById("wl-email").value.trim();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return toast("Cette adresse email n'est pas valide.");
       b.disabled = true;
-      const { error } = await sb.rpc("join_waitlist", { p_email: email });
+      const { error } = await sb.rpc("join_waitlist", { p_email: email, p_kind: kind });
       if (error) { b.disabled = false; return toast("Inscription impossible. Réessaie."); }
       document.getElementById("wl").innerHTML = `<h3>C'est noté ✓</h3><p class="muted small" style="margin:4px 0 0">Tu seras prévenu à ${esc(email)} dès qu'une place se libère.</p>`;
     };
@@ -515,9 +543,12 @@
           <div id="err" class="error" hidden></div>
           <button class="btn block" style="margin-top:18px" type="submit">${create ? "Créer la tribu" : "Rejoindre la tribu"}</button>
           <button class="link" type="button" id="switch">${create ? "J'ai un code d'invitation" : "Créer une nouvelle tribu"}</button>
+          ${state.pro ? `<button class="link" type="button" data-mode="pro">‹ Revenir à mon espace pro</button>` : `<button class="link" type="button" data-open-pro>👩‍🍼 Je suis assistante maternelle ou nounou</button>`}
           <button class="link small muted" type="button" id="logout">Se déconnecter</button>
         </form>
       </div>`;
+    $app.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+    $app.querySelectorAll("[data-open-pro]").forEach((b) => b.onclick = () => renderProOnboarding());
     document.getElementById("switch").onclick = () => renderOnboarding(create ? "join" : "create");
     document.getElementById("logout").onclick = () => sb.auth.signOut();
     document.getElementById("onb").onsubmit = async (e) => {
@@ -573,6 +604,18 @@
   }
 
   async function afterLogin() {
+    await loadProProfile();
+    state.mode = "famille";
+    if (state.pro) {
+      const { count } = await sb.from("members").select("household_id", { count: "exact", head: true }).eq("user_id", state.session.user.id);
+      state.hasFamily = !!count;
+      if (ls.get(MODE_KEY) === "pro" || !count) state.mode = "pro";
+    }
+    if (state.mode === "pro") {
+      await loadHousehold();
+      await loadPro(); subscribePro(); proSpots();
+      return render();
+    }
     await loadHousehold();
     const code = pendingInvite();
     if (code) {
@@ -637,7 +680,8 @@
     let html = `
       <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date"><span class="beta">Bêta</span> ${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
       ${chipsHtml()}
-      ${homeBanner()}`;
+      ${homeBanner()}
+      ${proHomeHtml()}`;
 
     state.children.filter((c) => (state.filter === "all" || state.filter === c.id) && ["bebe", "petit"].includes(ageBand(c))).forEach((c) => {
       html += `<section class="baby-card" style="--c:${esc(c.color)}">
@@ -708,6 +752,7 @@
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
+    html += proSectionHtml(c);
     html += vaccinesSummaryHtml(c);
     const trts = state.treatments.filter((t) => t.child_id === id);
     const today = ymd(new Date());
@@ -797,6 +842,15 @@
       <div class="card">${state.members.map((m) => `<div class="member"><span>${esc(m.display_name)}${m.user_id === state.session.user.id ? " (toi)" : ""}</span><span class="muted small">${m.role === "owner" ? "Créateur" : "Parent"}</span></div>`).join("")}</div>
       ${!isStandalone() ? `<h2>Application</h2><div class="card"><p class="muted small" style="margin-top:0">Installe Tribu sur ton écran d'accueil : elle s'ouvre comme une vraie application, en plein écran, sans passer par le navigateur.</p><button class="btn block" data-install-help>📲 Installer Tribu sur mon téléphone</button></div>` : ""}
       ${state.memberships.length > 1 ? `<h2>Mes tribus</h2><div class="card">${state.memberships.map((m) => `<div class="member"><span>${esc(m.households ? m.households.name : "Tribu")}</span>${m.household_id === state.household.id ? `<span class="muted small">Actuelle</span>` : `<button class="link small" style="padding:0" data-switch="${m.household_id}">Ouvrir</button>`}</div>`).join("")}</div>` : ""}
+      <h2>Espace pro</h2>
+      <div class="card">${state.pro
+        ? `<p class="muted small" style="margin-top:0">Ton espace d'assistante maternelle ou de nounou : ${esc(state.pro.display_name)}.</p><button class="btn ghost block" data-mode="pro">👩‍🍼 Passer à mon espace pro</button>`
+        : `<p class="muted small" style="margin-top:0">Tu es assistante maternelle, nounou ou en micro-crèche ? Suis les enfants que les parents te confient. Bêta ouverte à ${PRO_LIMIT} professionnels.</p><button class="btn ghost block" data-open-pro>👩‍🍼 Ouvrir un espace pro</button>`}</div>
+      ${accountHtml(true)}
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version ${TRIBU_VERSION} · bêta</p>`;
+  }
+  function accountHtml(withLeave) {
+    return `
       ${pkSupported() ? `<h2>Connexion avec ${bioLabel()}</h2>
       <div class="card">
         ${state.passkeys.length ? state.passkeys.map((k) => `<div class="member"><span>🔐 ${esc(k.device || "Appareil")}<br><span class="muted small">Ajoutée le ${new Date(k.created_at).toLocaleDateString("fr-FR")}${k.last_used_at ? ", utilisée " + ago(k.last_used_at) : ""}</span></span><button class="link small" style="padding:0" data-pk-del="${esc(k.id)}">Retirer</button></div>`).join("")
@@ -807,7 +861,7 @@
       <p class="muted small">${esc(state.session.user.email)}</p>
       <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
       <button class="btn ghost block" style="margin-top:10px" id="logout">Se déconnecter</button>
-      <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>
+      ${withLeave ? `<button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>` : ""}
       <h2>Mes données</h2>
       <div class="card">
         <p class="muted small" style="margin-top:0">Tes données restent en France, ne sont jamais vendues ni utilisées pour de la publicité.</p>
@@ -815,7 +869,7 @@
         <button class="btn ghost block" style="margin-top:10px" id="export-data">Exporter mes données</button>
         <button class="btn danger block" style="margin-top:10px" id="delete-account">Supprimer mon compte</button>
       </div>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version ${TRIBU_VERSION} · bêta</p>`;
+      ${withLeave ? "" : `<p class="muted small" style="text-align:center;margin-top:24px">Tribu version ${TRIBU_VERSION} · bêta pro</p>`}`;
   }
 
   // ---------- Notifications ----------
@@ -929,7 +983,7 @@
     const alone = state.members.length <= 1;
     openSheet(`
       <h2 style="margin-top:0">Supprimer mon compte</h2>
-      <p>${alone
+      <p>${state.mode === "pro" || !state.household ? `Ton compte${state.pro ? ", ton espace pro et l'accès aux enfants confiés" : ""} et tes appareils enregistrés seront effacés définitivement. Les heures déjà notées restent visibles pour les parents.${state.hasFamily ? " Tes tribus familiales sont transmises aux autres membres, ou effacées si tu en es le seul membre." : ""}` : alone
         ? `Tu es le seul membre de <strong>${esc(state.household.name)}</strong> : la tribu, les enfants, les rendez-vous, les activités, le journal, l'album photo et les courses seront <strong>effacés définitivement</strong>.`
         : `<strong>${esc(state.household.name)}</strong> sera conservée pour les autres membres. Ton compte, tes accès et tes appareils enregistrés seront effacés définitivement.`}</p>
       <p class="muted small">Cette action est irréversible. Pense à exporter tes données avant si tu veux les garder.</p>
@@ -1053,11 +1107,13 @@
     reveil:      { label: "Réveil",      ico: "🌞", bands: ["bebe", "petit"] },
     medicament:  { label: "Médicament",  ico: "💊", bands: ALL },
     temperature: { label: "Température", ico: "🌡️", bands: ALL },
-    bain:        { label: "Bain",        ico: "🛁", bands: ["bebe", "petit"] }
+    bain:        { label: "Bain",        ico: "🛁", bands: ["bebe", "petit"] },
+    transmission:{ label: "Message",     ico: "📝", bands: ["bebe", "petit", "enfant", "ado"] }
   };
   const kindsFor = (c) => {
     const band = ageBand(c), m = ageMonths(c.birth_date);
-    return Object.entries(KINDS).filter(([, k]) => k.bands.includes(band) && (!k.minMonths || m >= k.minMonths) && (!k.maxMonths || m < k.maxMonths)).map(([key]) => key);
+    return Object.entries(KINDS).filter(([key, k]) => k.bands.includes(band) && (!k.minMonths || m >= k.minMonths) && (!k.maxMonths || m < k.maxMonths)
+      && (key !== "transmission" || state.mode === "pro" || sharesOf(c.id).length)).map(([key]) => key);
   };
   const childLogs = (id) => state.logs.filter((l) => l.child_id === id);
   const ago = (at) => {
@@ -1078,6 +1134,7 @@
       case "pot": return `Pot : ${COUCHE[d.type] || ""}`;
       case "medicament": return `${d.name || "Médicament"}${d.dose ? " " + d.dose : ""}`;
       case "temperature": return `${String(d.t || "").replace(".", ",")} °C`;
+      case "transmission": return `Message${l.created_by ? " de " + (l.created_by === state.session.user.id ? "toi" : memberName(l.created_by) || "la nounou") : ""}`;
       default: return KINDS[l.kind].label;
     }
   }
@@ -1121,6 +1178,11 @@
   const quickGrid = (c) => `<div class="quick">${kindsFor(c).map((k) =>
     `<button class="q-btn" data-log="${k}" data-child="${c.id}"><span aria-hidden="true">${KINDS[k].ico}</span>${KINDS[k].label}</button>`).join("")}</div>`;
 
+  const logBy = (l) => {
+    if (l.kind === "transmission" || !l.created_by || l.created_by === state.session.user.id) return "";
+    const n = state.mode === "pro" ? memberName(l.created_by) : proNameOf(l.created_by);
+    return n ? `<span class="muted small"> · par ${esc(n)}</span>` : "";
+  };
   function journalHtml(c, limitDays = 2) {
     const from = startOfDay(new Date(Date.now() - (limitDays - 1) * 86400000));
     const logs = childLogs(c.id).filter((l) => new Date(l.at) >= from);
@@ -1128,10 +1190,13 @@
     const groups = {};
     logs.forEach((l) => { (groups[dayKey(l.at)] ||= []).push(l); });
     return Object.keys(groups).sort().reverse().map((k) => `<div class="j-day">${fmtDay(k)}</div>${groups[k].map((l) =>
-      `<button class="j-row" data-log-edit="${l.id}"><span class="j-time">${fmtTime(l.at)}</span><span aria-hidden="true">${KINDS[l.kind].ico}</span><span class="j-text">${esc(logLabel(l))}${l.note ? `<span class="muted"> · ${esc(l.note)}</span>` : ""}</span></button>`).join("")}`).join("");
+      `<button class="j-row" data-log-edit="${l.id}"><span class="j-time">${fmtTime(l.at)}</span><span aria-hidden="true">${KINDS[l.kind].ico}</span><span class="j-text">${esc(logLabel(l))}${l.note ? `<span class="muted"> · ${esc(l.note)}</span>` : ""}${logBy(l)}</span></button>`).join("")}`).join("");
   }
 
   function logPicker(c) {
+    if (state.mode === "pro") return openSheet(`<h2 style="margin-top:0">${esc(c.first_name)} : noter</h2>${quickGrid(c)}`, (el) => {
+      el.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => logForm(c, b.dataset.log));
+    });
     openSheet(`<h2 style="margin-top:0">${esc(c.first_name)} : noter</h2>${quickGrid(c)}
       <button class="btn ghost block" style="margin-top:14px" id="lp-item">📅 Rendez-vous, tâche ou note</button>
       <button class="btn ghost block" style="margin-top:10px" id="lp-act">🎯 Activité régulière</button>
@@ -1162,17 +1227,22 @@
       <label for="lf-dose">Dose donnée</label><input id="lf-dose" maxlength="60" value="${esc(d.dose || "")}" placeholder="Ex : 1 dose-poids, 2,5 ml">`;
     if (kind === "temperature") fields = `<label for="lf-t">Température (°C)</label><input id="lf-t" type="number" inputmode="decimal" step="0.1" min="34" max="43" required value="${esc(d.t || "")}" placeholder="37,5">
       <p class="error small" id="lf-fever" hidden>Avant 3 mois, une fièvre à 38 °C ou plus impose d'appeler rapidement le médecin, ou le 15 en cas de doute.</p>`;
+    const msg = kind === "transmission";
+    const msgTo = state.mode === "pro" ? "aux parents" : (sharesOf(c.id)[0] && sharesOf(c.id)[0].pros ? "à " + sharesOf(c.id)[0].pros.display_name : "à la nounou");
     openSheet(`
-      <h2 style="margin-top:0">${k.ico} ${k.label} · ${esc(c.first_name)}</h2>
+      <h2 style="margin-top:0">${k.ico} ${msg ? "Message " + esc(msgTo) : k.label} · ${esc(c.first_name)}</h2>
       <form id="lf">
         ${fields}
+        ${msg ? `<label for="lf-note">Message</label>
+        <textarea id="lf-note" maxlength="1000" rows="5" required placeholder="${state.mode === "pro" ? "Ex : belle journée, a bien mangé, petite sieste agitée. Penser à ramener des couches." : "Ex : nuit difficile, il a peut-être besoin d'une sieste plus tôt."}">${esc(existing ? existing.note || "" : "")}</textarea>
+        <input id="lf-at" type="hidden" value="${toLocalInput(existing ? existing.at : new Date().toISOString())}">` : `
         <label for="lf-at">Heure</label>
         <input id="lf-at" type="datetime-local" required value="${toLocalInput(existing ? existing.at : new Date().toISOString())}">
         <label for="lf-note">Note (facultatif)</label>
-        <input id="lf-note" maxlength="500" value="${esc(existing ? existing.note || "" : "")}" placeholder="${kind === "dodo" ? "Ex : dans son lit, s'est endormi seul" : "Ex : a régurgité un peu"}">
+        <input id="lf-note" maxlength="500" value="${esc(existing ? existing.note || "" : "")}" placeholder="${kind === "dodo" ? "Ex : dans son lit, s'est endormi seul" : "Ex : a régurgité un peu"}">`}
         <div class="actions">
           ${existing ? `<button type="button" class="btn danger" id="lf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="lf-cancel">Annuler</button>`}
-          <button class="btn" type="submit">Enregistrer</button>
+          <button class="btn" type="submit">${msg ? "Envoyer" : "Enregistrer"}</button>
         </div>
       </form>`, (el) => {
       const vals = { side: d.side || "", qty: d.qty || "", type: d.type || "" };
@@ -1191,7 +1261,7 @@
       if (t) t.oninput = () => { el.querySelector("#lf-fever").hidden = !(ageMonths(c.birth_date) < 3 && Number(t.value) >= 38); };
       const cancel = el.querySelector("#lf-cancel"); if (cancel) cancel.onclick = closeSheet;
       const del = el.querySelector("#lf-del");
-      if (del) del.onclick = async () => { await sb.from("logs").delete().eq("id", existing.id); closeSheet(); await loadAll(); render(); toast("Supprimé"); };
+      if (del) del.onclick = async () => { await sb.from("logs").delete().eq("id", existing.id); closeSheet(); await reloadData(); toast("Supprimé"); };
       form.onsubmit = async (e) => {
         e.preventDefault();
         const data = {};
@@ -1205,9 +1275,9 @@
         const row = { kind, data, at: new Date(v("#lf-at")).toISOString(), note: v("#lf-note") || null };
         const { error } = existing
           ? await sb.from("logs").update(row).eq("id", existing.id)
-          : await sb.from("logs").insert({ ...row, household_id: state.household.id, child_id: c.id, created_by: state.session.user.id });
+          : await sb.from("logs").insert({ ...row, household_id: c.household_id, child_id: c.id, created_by: state.session.user.id });
         if (error) return toast(errMsg(error));
-        closeSheet(); await loadAll(); render(); toast(`${k.label} noté${["couche", "tetee", "temperature"].includes(kind) ? "e" : ""}`);
+        closeSheet(); await reloadData(); toast(msg ? "Message envoyé" : `${k.label} noté${["couche", "tetee", "temperature"].includes(kind) ? "e" : ""}`);
       };
     });
   }
@@ -1223,7 +1293,7 @@
   const hm = (t) => (t || "").slice(0, 5);
   const atTime = (dateStr, t) => { const d = parseYmd(dateStr); const [h, m] = t.split(":").map(Number); d.setHours(h, m, 0, 0); return d; };
   const schoolYearEnd = () => { const n = new Date(); const y = n.getMonth() >= 6 ? n.getFullYear() + 1 : n.getFullYear(); return `${y}-07-04`; };
-  const memberName = (uid) => { const m = state.members.find((x) => x.user_id === uid); return m ? m.display_name : ""; };
+  const memberName = (uid) => { const m = state.members.find((x) => x.user_id === uid); return m ? m.display_name : proNameOf(uid); };
 
   function occurrences(a, from, to) {
     const out = [];
@@ -1408,17 +1478,18 @@
     const today = ymd(new Date());
     const log = state.logs.find((l) => l.kind === "medicament" && l.data && l.data.treatment_id === tid && l.data.date === today && l.data.slot === slot);
     if (log) {
+      if (state.mode === "pro" && log.created_by !== state.session.user.id) return toast("Donné par les parents : seuls eux peuvent l'annuler");
       if (!confirm(`Annuler la prise de ${slot} (${t.name}) ?`)) return;
       await sb.from("logs").delete().eq("id", log.id);
     } else {
       const { error } = await sb.from("logs").insert({
-        household_id: state.household.id, child_id: t.child_id, kind: "medicament", at: new Date().toISOString(),
+        household_id: t.household_id, child_id: t.child_id, kind: "medicament", at: new Date().toISOString(),
         data: { name: t.name, dose: t.dose || undefined, treatment_id: t.id, slot, date: today }, created_by: state.session.user.id
       });
       if (error) return toast(errMsg(error));
       toast(`${t.name} noté comme donné`);
     }
-    await loadAll(); render();
+    await reloadData();
   }
   const trtSchedule = (t) => {
     const days = t.weekdays && t.weekdays.length ? [...t.weekdays].sort().map((n) => DAY_SHORT[n - 1]).join(", ") : "tous les jours";
@@ -1976,6 +2047,7 @@
     $app.querySelectorAll("[data-log-pick]").forEach((b) => b.onclick = () => logPicker(childById(b.dataset.logPick)));
     $app.querySelectorAll("[data-log-edit]").forEach((b) => b.onclick = () => {
       const l = state.logs.find((x) => x.id === b.dataset.logEdit);
+      if (state.mode === "pro" && l.created_by !== state.session.user.id) return toast("Noté par les parents : seuls eux peuvent le modifier");
       logForm(childById(l.child_id), l.kind, l);
     });
     $app.querySelectorAll("[data-edit]").forEach((n) => {
@@ -1996,7 +2068,7 @@
     const vcu = document.getElementById("vac-catchup"); if (vcu) vcu.onclick = () => vaccineCatchup(route()[1]);
     $app.querySelectorAll("[data-trt-add]").forEach((b) => b.onclick = () => treatmentForm(b.dataset.trtAdd));
     $app.querySelectorAll("[data-trt]").forEach((b) => {
-      const open = () => { const t = state.treatments.find((x) => x.id === b.dataset.trt); if (t) treatmentForm(t.child_id, t); };
+      const open = () => { if (state.mode === "pro") return toast("Seuls les parents peuvent modifier un traitement"); const t = state.treatments.find((x) => x.id === b.dataset.trt); if (t) treatmentForm(t.child_id, t); };
       b.onclick = open; b.onkeydown = (e) => { if (e.key === "Enter") open(); };
     });
     $app.querySelectorAll("[data-dose]").forEach((b) => b.onclick = () => { const [tid, slot] = b.dataset.dose.split("|"); toggleDose(tid, slot); });
@@ -2021,6 +2093,23 @@
       state.household = data; render(); toast("Nouveaux liens créés");
     };
     const afc = document.getElementById("add-for-child"); if (afc) afc.onclick = () => itemForm(null, { child_id: afc.dataset.id });
+
+    // Espace pro
+    $app.querySelectorAll("[data-pres-arrive]").forEach((b) => b.onclick = () => { b.disabled = true; presArrive(b.dataset.presArrive); });
+    $app.querySelectorAll("[data-pres-leave]").forEach((b) => b.onclick = () => { b.disabled = true; presLeave(b.dataset.presLeave); });
+    $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
+    $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
+    $app.querySelectorAll("[data-share-add]").forEach((b) => b.onclick = () => shareSheet(b.dataset.shareAdd));
+    $app.querySelectorAll("[data-share-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm(state.mode === "pro" ? "Retirer cet enfant de ton espace ? Tu n'auras plus accès à son suivi." : "Retirer l'accès ? Elle ne verra plus le suivi de ton enfant. Les heures déjà notées restent visibles ici.")) return;
+      const { error } = await sb.from("child_shares").delete().eq("id", b.dataset.shareDel);
+      if (error) return toast(errMsg(error));
+      await reloadData(); toast("Accès retiré");
+    });
+    $app.querySelectorAll("[data-hours]").forEach((b) => b.onclick = () => { const [cid, pid] = b.dataset.hours.split("|"); hoursSheet(cid, pid); });
+    $app.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+    $app.querySelectorAll("[data-open-pro]").forEach((b) => b.onclick = () => renderProOnboarding());
+    const pe = document.getElementById("pro-edit"); if (pe) pe.onclick = proEditSheet;
 
     // Shopping
     const sa = document.getElementById("shop-add");
@@ -2128,6 +2217,393 @@
     };
   }
 
+  // ---------- Espace pro (assistantes maternelles, nounous, micro-crèches) ----------
+  const PRO_LIMIT = 50;
+  const PRO_KINDS = { assmat: "Assistante maternelle", nounou: "Nounou à domicile", creche: "Micro-crèche" };
+  async function proSpots() {
+    try { const { data } = await sb.rpc("pro_spots"); if (data) state.proBeta = data; } catch (_) {}
+    return state.proBeta;
+  }
+  const proPill = () => {
+    const b = state.proBeta;
+    return `<span id="pro-pill" class="beta-pill ${b && !b.left ? "full" : ""}">👩‍🍼 Bêta pro ouverte à ${PRO_LIMIT} professionnels${b ? " · " + (b.left ? `encore <strong>${b.left}</strong> place${b.left > 1 ? "s" : ""}` : "<strong>complet</strong>") : ""}</span>`;
+  };
+  const refreshProPill = () => proSpots().then(() => { const el = document.getElementById("pro-pill"); if (el) el.outerHTML = proPill(); });
+  const proLink = () => "https://jeremstyke.github.io/tribu/?pro=" + state.pro.pro_code;
+  const me = () => state.session.user.id;
+  const dur = (ms) => { const min = Math.max(0, Math.round(ms / 60000)); return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}`; };
+  const monthKey = (d) => ymd(d).slice(0, 7);
+  const monthLabel = (key) => { const [y, m] = key.split("-").map(Number); const s = new Date(y, m - 1, 1).toLocaleDateString("fr-FR", { month: "long", year: "numeric" }); return s.charAt(0).toUpperCase() + s.slice(1); };
+
+  async function loadProProfile() {
+    const { data } = await sb.from("pros").select("*").eq("user_id", me()).maybeSingle();
+    state.pro = data || null;
+  }
+
+  // Données de l'espace pro : uniquement les enfants que les parents ont confiés
+  async function loadPro() {
+    const { data: rows } = await sb.rpc("pro_children");
+    state.proKids = rows || [];
+    state.children = state.proKids.map((r) => ({ ...r.child, household_name: r.household_name, share_id: r.share_id }));
+    state.members = [{ user_id: me(), display_name: state.pro.display_name }];
+    state.proKids.forEach((r) => (r.parents || []).forEach((p) => { if (!state.members.some((m) => m.user_id === p.user_id)) state.members.push(p); }));
+    const ids = state.children.map((c) => c.id);
+    const since = new Date(Date.now() - 4 * 86400000).toISOString();
+    const from = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
+    if (ids.length) {
+      const [lg, tr, pr] = await Promise.all([
+        sb.from("logs").select("*").in("child_id", ids).gte("at", since).order("at", { ascending: false }).limit(1000),
+        sb.from("treatments").select("*").in("child_id", ids).order("created_at"),
+        sb.from("presences").select("*").eq("pro_user_id", me()).gte("day", from).order("arrived_at")
+      ]);
+      state.logs = lg.data || []; state.treatments = tr.data || []; state.presences = pr.data || [];
+    } else { state.logs = []; state.treatments = []; state.presences = []; }
+    Object.assign(state, { items: [], shopping: [], photos: [], activities: [], vaccines: [], shares: [] });
+    await loadPhotoUrls();
+  }
+  function subscribePro() {
+    if (state.channel) sb.removeChannel(state.channel);
+    let timer;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode !== "pro") return; await loadPro(); render(); }, 250); };
+    const ids = state.children.map((c) => c.id);
+    state.channel = sb.channel("tribu-pro-" + me());
+    state.channel.on("postgres_changes", { event: "*", schema: "public", table: "child_shares", filter: `pro_user_id=eq.${me()}` }, refresh);
+    state.channel.on("postgres_changes", { event: "*", schema: "public", table: "presences", filter: `pro_user_id=eq.${me()}` }, refresh);
+    if (ids.length) ["logs", "treatments", "children"].forEach((table) =>
+      state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `${table === "children" ? "id" : "child_id"}=in.(${ids.join(",")})` }, refresh));
+    state.channel.subscribe();
+  }
+  const reloadData = async () => { if (state.mode === "pro") await loadPro(); else await loadAll(); render(); };
+
+  async function setMode(mode) {
+    ls.set(MODE_KEY, mode);
+    state.mode = mode;
+    if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+    Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], presences: [], shares: [], filter: "all" });
+    $app.innerHTML = `<div class="hero"><p class="muted">Chargement...</p></div>`;
+    if (mode === "pro") { await loadPro(); subscribePro(); } else await loadHousehold();
+    history.replaceState(null, "", location.pathname + "#/accueil");
+    render();
+  }
+
+  // ----- Présences -----
+  const presOf = (cid, day) => state.presences.filter((p) => p.child_id === cid && p.day === day).sort((a, b) => a.arrived_at.localeCompare(b.arrived_at));
+  const openPres = (cid) => state.presences.find((p) => p.child_id === cid && !p.left_at && p.day === ymd(new Date()));
+  function monthTotal(cid, key, proId) {
+    const list = state.presences.filter((p) => p.child_id === cid && p.day.startsWith(key) && p.left_at && (!proId || p.pro_user_id === proId));
+    return { days: new Set(list.map((p) => p.day)).size, ms: list.reduce((a, p) => a + (new Date(p.left_at) - new Date(p.arrived_at)), 0), list };
+  }
+  function presStatus(cid, who) {
+    const today = presOf(cid, ymd(new Date()));
+    const open = today.find((p) => !p.left_at);
+    if (open) return `🟢 ${who ? "Chez " + esc(who) + " · a" : "A"}rrivée à ${fmtTime(open.arrived_at)} · depuis ${dur(Date.now() - new Date(open.arrived_at))}`;
+    if (today.length) return `✅ ${today.map((p) => `${fmtTime(p.arrived_at)} - ${fmtTime(p.left_at)}`).join(", ")} · ${dur(today.reduce((a, p) => a + (new Date(p.left_at) - new Date(p.arrived_at)), 0))}`;
+    return who ? `Pas chez ${esc(who)} aujourd'hui` : "Pas encore arrivé(e)";
+  }
+  async function presArrive(cid) {
+    const c = childById(cid); if (!c) return;
+    const { error } = await sb.from("presences").insert({ household_id: c.household_id, child_id: cid, pro_user_id: me(), pro_name: state.pro.display_name, day: ymd(new Date()), arrived_at: new Date().toISOString() });
+    if (error) return toast(errMsg(error));
+    toast(`Arrivée de ${c.first_name} notée`); await reloadData();
+  }
+  async function presLeave(cid) {
+    const p = openPres(cid); if (!p) return;
+    const { error } = await sb.from("presences").update({ left_at: new Date().toISOString() }).eq("id", p.id);
+    if (error) return toast(errMsg(error));
+    toast(`Départ de ${childById(cid).first_name} noté`); await reloadData();
+  }
+  function presSheet(cid, day = ymd(new Date())) {
+    const c = childById(cid);
+    const list = presOf(cid, day);
+    const t = (iso) => iso ? toLocalInput(iso).slice(11) : "";
+    const row = (p, i) => `<div class="pres-row" data-pid="${p ? p.id : "new"}">
+        <div><label>Arrivée</label><input type="time" class="pa" value="${p ? t(p.arrived_at) : ""}"></div>
+        <div><label>Départ</label><input type="time" class="pl" value="${p ? t(p.left_at) : ""}"></div>
+        ${p ? `<button type="button" class="link small danger-link" data-pdel="${p.id}" aria-label="Supprimer">✕</button>` : ""}</div>`;
+    openSheet(`<h2 style="margin-top:0">⏱️ ${esc(c.first_name)} · ${fmtDay(parseYmd(day))}</h2>
+      <label for="ps-day">Jour</label><input id="ps-day" type="date" value="${day}" max="${ymd(new Date())}">
+      <div id="ps-rows">${list.map(row).join("")}${row(null)}</div>
+      <p class="muted small">Laisse le départ vide si ${esc(c.first_name)} est encore là. La dernière ligne sert à ajouter un créneau.</p>
+      <div class="actions"><button type="button" class="btn ghost" id="ps-cancel">Fermer</button><button class="btn" id="ps-save">Enregistrer</button></div>`, (el) => {
+      el.querySelector("#ps-cancel").onclick = closeSheet;
+      el.querySelector("#ps-day").onchange = (e) => { if (e.target.value) presSheet(cid, e.target.value); };
+      el.querySelectorAll("[data-pdel]").forEach((b) => b.onclick = async () => {
+        if (!confirm("Supprimer ce créneau ?")) return;
+        await sb.from("presences").delete().eq("id", b.dataset.pdel); await reloadData(); presSheet(cid, day);
+      });
+      el.querySelector("#ps-save").onclick = async () => {
+        const at = (hhmm) => hhmm ? atTime(day, hhmm).toISOString() : null;
+        for (const r of el.querySelectorAll(".pres-row")) {
+          const a = r.querySelector(".pa").value, l = r.querySelector(".pl").value;
+          if (r.dataset.pid === "new" && !a) continue;
+          if (!a) return toast("Indique l'heure d'arrivée");
+          if (l && l <= a) return toast("Le départ doit être après l'arrivée");
+          const row = { arrived_at: at(a), left_at: at(l) };
+          const { error } = r.dataset.pid === "new"
+            ? await sb.from("presences").insert({ ...row, household_id: c.household_id, child_id: cid, pro_user_id: me(), pro_name: state.pro.display_name, day })
+            : await sb.from("presences").update(row).eq("id", r.dataset.pid);
+          if (error) return toast(errMsg(error));
+        }
+        closeSheet(); await reloadData(); toast("Heures enregistrées");
+      };
+    });
+  }
+  function hoursDetail(cid, key, proId) {
+    const tot = monthTotal(cid, key, proId);
+    const byDay = {};
+    tot.list.forEach((p) => { (byDay[p.day] ||= []).push(p); });
+    return Object.keys(byDay).sort().map((d) => `<div class="member"><span>${parseYmd(d).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" })}<br><span class="muted small">${byDay[d].map((p) => fmtTime(p.arrived_at) + " - " + fmtTime(p.left_at)).join(", ")}</span></span>
+      <span class="small">${dur(byDay[d].reduce((a, p) => a + (new Date(p.left_at) - new Date(p.arrived_at)), 0))}${state.mode === "pro" ? ` <button class="link small" style="padding:0" data-pres-edit="${cid}|${d}">Modifier</button>` : ""}</span></div>`).join("") || `<p class="muted small">Aucune heure notée ce mois-ci.</p>`;
+  }
+
+  // ----- Vues pro -----
+  function proKidCard(c) {
+    const open = openPres(c.id);
+    const last = childLogs(c.id)[0];
+    return `<div class="card pro-kid" style="--c:${esc(c.color)}">
+      <div class="pk-head" data-go="#/enfant/${c.id}" role="button" tabindex="0">
+        <div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
+        <div><strong>${esc(c.first_name)}</strong><div class="muted small">${esc(age(c.birth_date) || "nouveau-né")} · ${esc(c.household_name || "")}</div></div>
+        <span class="pk-go" aria-hidden="true">›</span>
+      </div>
+      <p class="small pk-status">${presStatus(c.id)}</p>
+      ${last ? `<p class="muted small" style="margin:0 0 10px">Dernier : ${KINDS[last.kind] ? KINDS[last.kind].ico : ""} ${esc(logLabel(last))}, ${ago(last.at)}</p>` : ""}
+      <div class="row">
+        ${open ? `<button class="btn ghost" data-pres-leave="${c.id}">👋 Départ</button>` : `<button class="btn" data-pres-arrive="${c.id}">🏡 Arrivée</button>`}
+        <button class="btn ${open ? "" : "ghost"}" data-log-pick="${c.id}">✏️ Noter</button>
+      </div>
+    </div>`;
+  }
+  function viewProHome() {
+    const d = new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+    let html = `<header class="top"><div><div class="date"><span class="beta">Pro</span>${esc(d.charAt(0).toUpperCase() + d.slice(1))}</div><h1>Bonjour ${esc(state.pro.display_name)}</h1></div></header>${homeBanner()}`;
+    if (!state.children.length) return html + `<div class="card">
+        <h3>Aucun enfant pour l'instant</h3>
+        <p class="muted small">Envoie ton lien aux parents. En l'ouvrant, ils choisissent quels enfants te confier. Ils peuvent aussi saisir ton code dans la fiche de leur enfant.</p>
+        <div class="code">${esc(state.pro.pro_code)}</div>
+        <button class="btn block" style="margin-top:12px" data-pro-share>📨 Envoyer mon lien aux parents</button>
+      </div>`;
+    const here = state.children.filter((c) => openPres(c.id)).length;
+    html += `<p class="muted small" style="margin-top:0">${here ? `${here} enfant${here > 1 ? "s" : ""} présent${here > 1 ? "s" : ""} en ce moment` : "Aucun enfant présent pour l'instant"}</p>`;
+    const dz = dosesToday();
+    if (dz.length) html += `<h2>💊 Traitements du jour</h2>${dz.map((x) => doseRow(x)).join("")}`;
+    html += `<h2>Mes enfants</h2>${state.children.map(proKidCard).join("")}`;
+    return html;
+  }
+  function viewProChild(id) {
+    const c = childById(id);
+    if (!c) { location.hash = "#/accueil"; return ""; }
+    const open = openPres(c.id);
+    let html = `<button class="back" onclick="location.hash='#/accueil'">‹ Mes enfants</button>
+      <div class="child-head"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
+        <div><h1>${esc(c.first_name)}</h1><div class="muted">${esc(age(c.birth_date) || "nouveau-né")} · ${esc(c.household_name || "")}</div></div></div>
+      <div class="card"><p class="small" style="margin-top:0">${presStatus(c.id)}</p>
+        <div class="row">${open ? `<button class="btn" data-pres-leave="${c.id}">👋 Départ</button>` : `<button class="btn" data-pres-arrive="${c.id}">🏡 Arrivée</button>`}
+        <button class="btn ghost" data-pres-edit="${c.id}|${ymd(new Date())}">⏱️ Modifier les heures</button></div></div>
+      <h2>Noter</h2>${quickGrid(c)}${statsHtml(babyStats(c))}`;
+    const dz = dosesToday((t) => t.child_id === id);
+    if (dz.length) html += `<h2>💊 Traitements du jour</h2>${dz.map((x) => doseRow(x, false)).join("")}`;
+    const today = ymd(new Date());
+    const cur = state.treatments.filter((t) => t.child_id === id && (!t.end_date || t.end_date >= today));
+    if (cur.length) html += `<p class="muted small">En cours : ${cur.map((t) => `${esc(t.name)}${t.dose ? " (" + esc(t.dose) + ")" : ""}, ${esc(trtSchedule(t))}`).join(" · ")}</p>`;
+    html += `<h2>Journal</h2>${journalHtml(c)}`;
+    return html;
+  }
+  function viewProHours(key) {
+    const now = new Date();
+    const keys = [0, 1, 2].map((i) => monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+    key = keys.includes(key) ? key : keys[0];
+    let html = `<header class="top"><h1>Heures</h1></header>
+      <div class="seg">${keys.map((k) => `<button data-go="#/heures/${k}" aria-pressed="${k === key}">${monthLabel(k).replace(/ \d{4}$/, "")}</button>`).join("")}</div>
+      <p class="muted small">Les heures d'arrivée et de départ notées chaque jour. Pratique pour ta déclaration Pajemploi : vérifie toujours avec ton contrat (heures complémentaires ou majorées, absences).</p>`;
+    if (!state.children.length) return html + `<p class="muted">Aucun enfant pour l'instant.</p>`;
+    state.children.forEach((c) => {
+      const t = monthTotal(c.id, key);
+      html += `<details class="card hours"><summary><span><strong>${esc(c.first_name)}</strong><br><span class="muted small">${esc(c.household_name || "")}</span></span><span><strong>${dur(t.ms)}</strong><br><span class="muted small">${t.days} jour${t.days > 1 ? "s" : ""}</span></span></summary>
+        ${hoursDetail(c.id, key)}
+        <button class="btn ghost block" style="margin-top:10px" data-pres-edit="${c.id}|${key === keys[0] ? ymd(now) : key + "-01"}">Ajouter ou corriger un jour</button></details>`;
+    });
+    return html;
+  }
+  function viewProSettings() {
+    return `<header class="top"><h1>Réglages</h1><span class="beta">Pro</span></header>
+      <div class="beta-card">
+        <strong>Espace pro en bêta</strong>
+        <p class="small" style="margin:4px 0 10px">Ouvert à ${PRO_LIMIT} professionnels pour l'instant, gratuit pendant la bêta. Dis-moi ce qui te manque au quotidien : c'est toi qui fais évoluer l'outil.</p>
+        <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu Pro : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " pro · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
+        <a class="btn ghost block" style="margin-top:10px" href="faq.html#pro">❓ Questions fréquentes</a>
+      </div>
+      <div class="card">
+        <h3>${esc(state.pro.display_name)}</h3>
+        <p class="muted small" style="margin:2px 0 10px">${esc(PRO_KINDS[state.pro.kind] || "")}</p>
+        <button class="btn ghost block" id="pro-edit">Modifier mon profil</button>
+      </div>
+      <div class="card">
+        <h3>Inviter des parents</h3>
+        <p class="muted small">Envoie ce lien aux parents : ils choisissent quels enfants te confier. Tu vois leur journal et leurs traitements du jour, tu notes repas, siestes, couches, arrivées et départs. Tu ne vois ni leurs rendez-vous, ni leurs vaccins, ni leur album photo, ni leurs courses.</p>
+        <button class="btn block" data-pro-share>📨 Envoyer mon lien aux parents</button>
+        <p class="muted small" style="margin:14px 0 0">Ou donne-leur ton code pro :</p>
+        <div class="code">${esc(state.pro.pro_code)}</div>
+      </div>
+      ${state.children.length ? `<h2>Enfants confiés</h2><div class="card">${state.children.map((c) => `<div class="member"><span>${esc(c.first_name)}<br><span class="muted small">${esc(c.household_name || "")}</span></span><button class="link small" style="padding:0" data-share-del="${c.share_id}">Retirer</button></div>`).join("")}</div>` : ""}
+      ${settingsNotifHtml()}
+      <h2>Ma famille</h2>
+      <div class="card"><p class="muted small" style="margin-top:0">${state.hasFamily ? "Tu as aussi un espace famille pour tes propres enfants." : "Tu peux aussi utiliser Tribu pour ta propre famille, séparément de ton espace pro."}</p>
+        <button class="btn ghost block" data-mode="famille">${state.hasFamily ? "👪 Passer à mon espace famille" : "👪 Créer l'espace de ma famille"}</button></div>
+      ${accountHtml(false)}`;
+  }
+  function renderPro() {
+    const [page, id] = route();
+    let body;
+    if (page === "enfant") body = viewProChild(id);
+    else if (page === "heures") body = viewProHours(id);
+    else if (page === "reglages") body = viewProSettings();
+    else body = viewProHome();
+    const active = page === "heures" || page === "reglages" ? page : "accueil";
+    $app.innerHTML = `<main class="wrap">${body}</main>
+      <nav class="nav" aria-label="Navigation"><ul>
+        ${navLink("accueil", "🏠", "Enfants", active)}${navLink("heures", "⏱️", "Heures", active)}${navLink("reglages", "⚙️", "Réglages", active)}
+      </ul></nav>`;
+    bindCommon();
+  }
+
+  function renderProOnboarding() {
+    const full = state.proBeta && state.proBeta.left <= 0;
+    if (!state.proBeta && !state.proBetaTried) { state.proBetaTried = true; proSpots().then(() => renderProOnboarding()); }
+    $app.innerHTML = `<div class="hero">
+      <h1>Espace pro</h1>
+      ${proPill()}
+      ${full ? waitlistHtml(state.session.user.email, true) : `
+      <p class="lead">Pour les assistantes maternelles, nounous et micro-crèches : arrivées et départs, repas, siestes, couches, traitements et cahier de liaison avec les parents. Gratuit pendant la bêta.</p>
+      <form class="card" id="pro-onb">
+        <label for="pn">Ton nom, tel que les parents le connaissent</label>
+        <input id="pn" required maxlength="60" autocomplete="name" placeholder="Ex : Nadia, ou Les Petits Loups">
+        <label>Tu es</label>
+        <div class="seg" id="pk">${Object.entries(PRO_KINDS).map(([k, l], i) => `<button type="button" data-v="${k}" aria-pressed="${i === 0}">${l}</button>`).join("")}</div>
+        <div id="err" class="error" hidden></div>
+        <button class="btn block" style="margin-top:18px" type="submit">Créer mon espace pro</button>
+      </form>`}
+      ${state.hasFamily || state.household ? `<button class="link" id="pro-back">‹ Revenir à mon espace famille</button>` : `<button class="link" id="pro-back">Je suis un parent</button>`}
+      <button class="link small muted" id="logout">Se déconnecter</button></div>`;
+    if (full) bindWaitlist("pro");
+    document.getElementById("logout").onclick = () => sb.auth.signOut();
+    document.getElementById("pro-back").onclick = () => { ls.set(WANT_PRO_KEY, null); state.mode = "famille"; render(); };
+    const f = document.getElementById("pro-onb"); if (!f) return;
+    let kind = "assmat";
+    f.querySelector("#pk").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; kind = b.dataset.v; f.querySelectorAll("#pk button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err"); err.hidden = true;
+      const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
+      const { data, error } = await sb.rpc("create_pro", { p_name: document.getElementById("pn").value.trim(), p_kind: kind });
+      btn.disabled = false;
+      if (error) { err.hidden = false; err.textContent = errMsg(error); if (/pro_full/.test(error.message)) { state.proBeta = { left: 0 }; renderProOnboarding(); } return; }
+      state.pro = data; ls.set(WANT_PRO_KEY, null);
+      await setMode("pro");
+      toast("Ton espace pro est prêt");
+    };
+  }
+  function proEditSheet() {
+    openSheet(`<h2 style="margin-top:0">Mon profil pro</h2><form id="pe">
+      <label for="pe-n">Nom affiché aux parents</label><input id="pe-n" required maxlength="60" value="${esc(state.pro.display_name)}">
+      <label>Tu es</label><div class="seg" id="pe-k">${Object.entries(PRO_KINDS).map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${k === state.pro.kind}">${l}</button>`).join("")}</div>
+      <div class="actions"><button type="button" class="btn danger" id="pe-del">Fermer mon espace pro</button><button class="btn" type="submit">Enregistrer</button></div></form>`, (el) => {
+      let kind = state.pro.kind;
+      el.querySelector("#pe-k").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; kind = b.dataset.v; el.querySelectorAll("#pe-k button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
+      el.querySelector("#pe").onsubmit = async (e) => {
+        e.preventDefault();
+        const { data, error } = await sb.from("pros").update({ display_name: el.querySelector("#pe-n").value.trim(), kind }).eq("user_id", me()).select().single();
+        if (error) return toast(errMsg(error));
+        state.pro = data; closeSheet(); render(); toast("Profil enregistré");
+      };
+      el.querySelector("#pe-del").onclick = async () => {
+        if (!confirm("Fermer ton espace pro ? Les parents n'auront plus de lien avec toi. Les heures déjà notées restent visibles pour eux.")) return;
+        const { error } = await sb.from("pros").delete().eq("user_id", me());
+        if (error) return toast(errMsg(error));
+        state.pro = null; closeSheet(); await setMode("famille"); toast("Espace pro fermé");
+      };
+    });
+  }
+  async function proShare() {
+    const text = `${state.pro.display_name} t'invite à suivre la journée de ton enfant sur Tribu (repas, siestes, arrivées et départs, petits mots) :`;
+    if (navigator.share) { try { await navigator.share({ title: "Tribu", text, url: proLink() }); } catch (_) {} }
+    else { try { await navigator.clipboard.writeText(text + " " + proLink()); toast("Lien copié"); } catch (_) { toast(proLink(), 5000); } }
+  }
+
+  // ----- Côté parents : confier un enfant -----
+  const sharesOf = (cid) => (state.shares || []).filter((s) => s.child_id === cid);
+  const proNameOf = (uid) => { const s = (state.shares || []).find((x) => x.pro_user_id === uid); return s && s.pros ? s.pros.display_name : ""; };
+  function proSectionHtml(c) {
+    if (isAdult(c)) return "";
+    const list = sharesOf(c.id);
+    if (!list.length) return ageBand(c) === "ado" ? "" : `<h2>🏡 Nounou</h2><div class="card">
+      <p class="muted small" style="margin-top:0">Ton enfant est chez une assistante maternelle ou une nounou ? Avec son code, elle note arrivées et départs, repas, siestes et couches, et vous échangez des petits mots. Elle ne voit que ${esc(c.first_name)}, rien d'autre de ta tribu.</p>
+      <button class="btn ghost block" data-share-add="${c.id}">Confier ${esc(c.first_name)} à ma nounou</button></div>`;
+    const key = monthKey(new Date());
+    return `<h2>🏡 Nounou</h2>` + list.map((s) => {
+      const name = s.pros ? s.pros.display_name : "Nounou";
+      const t = monthTotal(c.id, key, s.pro_user_id);
+      return `<div class="card">
+        <div class="member" style="border:0;padding-top:0"><span><strong>${esc(name)}</strong><br><span class="muted small">${esc(PRO_KINDS[s.pros && s.pros.kind] || "")}</span></span><button class="link small" style="padding:0" data-share-del="${s.id}">Retirer l'accès</button></div>
+        <p class="small" style="margin:6px 0">${presStatus(c.id, name)}</p>
+        <button class="link small" style="padding:0" data-hours="${c.id}|${s.pro_user_id}">⏱️ ${monthLabel(key).replace(/ \d{4}$/, "")} : ${t.days} jour${t.days > 1 ? "s" : ""}, ${dur(t.ms)} ›</button>
+        <button class="btn ghost block" style="margin-top:10px" data-log="transmission" data-child="${c.id}">📝 Écrire à ${esc(name)}</button>
+      </div>`;
+    }).join("") + `<button class="link small" data-share-add="${c.id}">+ Confier aussi à une autre personne</button>`;
+  }
+  function proHomeHtml() {
+    const here = state.presences.filter((p) => !p.left_at && p.day === ymd(new Date()));
+    return here.map((p) => { const c = childById(p.child_id); if (!c) return "";
+      return `<div class="pres-home" data-go="#/enfant/${c.id}" role="button" tabindex="0"><span aria-hidden="true">🏡</span> <strong>${esc(c.first_name)}</strong> est chez ${esc(proNameOf(p.pro_user_id) || p.pro_name || "la nounou")} depuis ${fmtTime(p.arrived_at)}</div>`; }).join("");
+  }
+  function hoursSheet(cid, proId) {
+    const c = childById(cid), now = new Date();
+    const keys = [0, 1, 2].map((i) => monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+    openSheet(`<h2 style="margin-top:0">⏱️ ${esc(c.first_name)} chez ${esc(proNameOf(proId) || "la nounou")}</h2>
+      ${keys.map((k) => { const t = monthTotal(cid, k, proId); return `<details class="hours" ${k === keys[0] ? "open" : ""}><summary><strong>${monthLabel(k)}</strong><span>${t.days} j · ${dur(t.ms)}</span></summary>${hoursDetail(cid, k, proId)}</details>`; }).join("")}
+      <p class="muted small">Heures notées par ${esc(proNameOf(proId) || "la nounou")}. En cas d'écart, parlez-en ensemble : c'est elle qui peut les corriger.</p>
+      <button class="btn ghost block" id="hs-close">Fermer</button>`, (el) => { el.querySelector("#hs-close").onclick = closeSheet; });
+  }
+  function shareSheet(cid, code = "") {
+    const kids = state.children.filter((c) => !isAdult(c));
+    if (!kids.length) { toast("Ajoute d'abord ton enfant dans l'onglet Famille"); return; }
+    openSheet(`<h2 style="margin-top:0">Confier à une nounou</h2>
+      <form id="sh">
+        <label for="sh-code">Code pro de ta nounou ou assistante maternelle</label>
+        <input id="sh-code" required maxlength="6" value="${esc(code)}" style="text-transform:uppercase;letter-spacing:.15em;font-weight:700" placeholder="ABC123">
+        <p id="sh-who" class="small" hidden></p>
+        <label>Enfant${kids.length > 1 ? "s" : ""} à lui confier</label>
+        ${kids.map((c) => `<label class="check-row"><input type="checkbox" value="${c.id}" ${c.id === cid || kids.length === 1 ? "checked" : ""}> ${esc(c.emoji)} ${esc(c.first_name)}</label>`).join("")}
+        <div class="vac-info small"><strong>Elle verra</strong> : prénom, âge et photo, le journal (repas, siestes, couches, médicaments, température), les traitements en cours, vos messages et vos prénoms. <strong>Elle ne verra pas</strong> : rendez-vous, vaccins, album, courses, ni les autres enfants de ta tribu. Tu peux retirer l'accès à tout moment.</div>
+        <div id="sh-err" class="error" hidden></div>
+        <div class="actions"><button type="button" class="btn ghost" id="sh-cancel">Annuler</button><button class="btn" type="submit">Confier</button></div>
+      </form>`, (el) => {
+      const inp = el.querySelector("#sh-code"), who = el.querySelector("#sh-who");
+      const look = async () => {
+        const v = inp.value.trim().toUpperCase(); who.hidden = true;
+        if (v.length !== 6) return;
+        const { data } = await sb.rpc("pro_preview", { p_code: v });
+        if (data) { who.hidden = false; who.innerHTML = `✅ <strong>${esc(data.name)}</strong>, ${esc((PRO_KINDS[data.kind] || "").toLowerCase())}`; }
+      };
+      inp.oninput = look; if (code) look();
+      el.querySelector("#sh-cancel").onclick = () => { ls.set(PRO_LINK_KEY, null); closeSheet(); };
+      el.querySelector("#sh").onsubmit = async (e) => {
+        e.preventDefault();
+        const err = el.querySelector("#sh-err"); err.hidden = true;
+        const ids = [...el.querySelectorAll(".check-row input:checked")].map((x) => x.value);
+        if (!ids.length) { err.hidden = false; err.textContent = "Coche au moins un enfant."; return; }
+        let name = "";
+        for (const id of ids) {
+          const { data, error } = await sb.rpc("share_child_with_pro", { p_child: id, p_code: inp.value.trim() });
+          if (error) { err.hidden = false; err.textContent = errMsg(error); return; }
+          name = data && data.name;
+        }
+        ls.set(PRO_LINK_KEY, null);
+        closeSheet(); await loadAll(); render(); toast(`C'est fait : ${name} a accès au suivi`);
+      };
+    });
+  }
+
   // ---------- Boot ----------
   // L'accueil s'ouvre toujours sur "Tous"
   window.addEventListener("hashchange", () => { closeSheet(); if (route()[0] === "accueil") state.filter = "all"; render(); window.scrollTo(0, 0); });
@@ -2158,7 +2634,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], memberships: [], passkeys: [], photoUrls: {} });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], memberships: [], passkeys: [], photoUrls: {}, mode: "famille", pro: null, proKids: [], presences: [], shares: [], hasFamily: false, proLinkShown: false });
       return render();
     }
     if (!booted || prev !== session.user.id) {

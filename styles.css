@@ -333,3 +333,22 @@ h1 .beta { font-size: .9rem; vertical-align: super; margin-left: 4px; }
 .beta-pill { display: inline-block; align-self: flex-start; background: var(--surface); border: 1.5px solid var(--accent); border-radius: 999px; padding: 6px 14px; font-size: .88rem; margin: -8px 0 18px; }
 .beta-pill.full { border-color: var(--danger); }
 .desktop-gate .beta-pill { align-self: center; margin: 0 0 14px; }
+
+/* Espace pro */
+.pro-kid { border-left: 5px solid var(--c); }
+.pk-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.pk-head .bubble { width: 46px; height: 46px; font-size: 1.5rem; flex: none; }
+.pk-head > div:nth-child(2) { flex: 1; }
+.pk-go { font-size: 1.6rem; color: var(--ink-soft); }
+.pk-status { margin: 10px 0 6px; }
+.pres-home { background: var(--surface); border: 1px solid var(--line); border-left: 5px solid #3FA34D; border-radius: var(--radius-sm); padding: 12px 14px; margin: 0 0 12px; cursor: pointer; }
+.pres-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pres-row label { margin-top: 0; }
+.danger-link { color: var(--danger); font-size: 1.1rem; padding: 10px 4px; }
+details.hours summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; list-style: none; padding: 4px 0; text-align: left; }
+details.hours summary::-webkit-details-marker { display: none; }
+details.hours summary > span:last-child { text-align: right; }
+details.hours[open] summary { margin-bottom: 8px; }
+.check-row { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 8px 0; margin: 0; }
+.check-row input { width: 22px; height: 22px; accent-color: var(--accent); }
+textarea { width: 100%; resize: vertical; }

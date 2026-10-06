@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tribu Pro : l'appli des assistantes maternelles et nounous (bêta gratuite)</title>
+  <meta name="description" content="Pointage des arrivées et départs, heures du mois pour Pajemploi, journal des repas, siestes et couches, traitements et cahier de liaison avec les parents. Bêta gratuite ouverte à 50 professionnels.">
+  <link rel="canonical" href="https://jeremstyke.github.io/tribu/pro.html">
+  <meta name="theme-color" content="#1F2D4D">
+  <meta property="og:title" content="Tribu Pro : l'appli des assistantes maternelles et nounous">
+  <meta property="og:description" content="Arrivées et départs, heures du mois, journal et cahier de liaison avec les parents. Bêta gratuite ouverte à 50 professionnels.">
+  <meta property="og:image" content="https://jeremstyke.github.io/tribu/og.png?v=1">
+  <meta property="og:url" content="https://jeremstyke.github.io/tribu/pro.html">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=23">
+  <link rel="stylesheet" href="guides/guides.css?v=23">
+</head>
+<body>
+  <main class="guide">
+    <a href="./" class="back">‹ Tribu</a>
+    <h1>Tribu Pro, pour les assistantes maternelles et les nounous</h1>
+    <p><span id="spots" class="beta-pill">👩‍🍼 Bêta pro ouverte à 50 professionnels</span></p>
+    <p class="intro">Fini le cahier de liaison qui se perd et les heures notées sur un coin de papier. Tu notes la journée de chaque enfant en deux appuis, les parents la suivent en direct.</p>
+
+    <h2>Ce que tu fais avec Tribu Pro</h2>
+    <ul>
+      <li><strong>🏡 Pointer l'arrivée et le départ</strong> de chaque enfant. Les parents sont prévenus.</li>
+      <li><strong>⏱️ Les heures du mois</strong>, par enfant et jour par jour : pratique pour ta déclaration Pajemploi.</li>
+      <li><strong>🍼 Le journal</strong> : repas, biberons, siestes, couches, médicaments, température.</li>
+      <li><strong>💊 Les traitements</strong> prescrits par les parents, avec un rappel à l'heure de la prise.</li>
+      <li><strong>📝 Le cahier de liaison</strong> : des messages dans les deux sens, avec une notification.</li>
+    </ul>
+
+    <h2>Comment ça marche</h2>
+    <ol>
+      <li>Tu crées ton espace pro, gratuitement.</li>
+      <li>Tu envoies ton lien aux parents. Ils choisissent quels enfants te confier.</li>
+      <li>Les parents qui n'utilisent pas encore Tribu créent leur compte en une minute, sans abonnement.</li>
+    </ol>
+    <div class="box small">Tu ne vois que les enfants qu'on te confie, et seulement ce qui sert à la garde : pas les rendez-vous, ni les vaccins, ni l'album photo de la famille. Les parents peuvent retirer l'accès à tout moment. Données hébergées en France.</div>
+
+    <div class="cta"><h2>Rejoindre la bêta pro</h2><p>Gratuit pendant la bêta. En échange, tes retours aident à construire l'outil dont tu as vraiment besoin.</p><a class="btn" href="./?espace=pro&amp;src=page-pro">Créer mon espace pro</a></div>
+
+    <h2>Questions</h2>
+    <h3>Ça marche sur quel téléphone ?</h3>
+    <p>iPhone et Android. Tribu s'installe depuis le navigateur, sans passer par l'App Store ni le Play Store.</p>
+    <h3>Et après la bêta ?</h3>
+    <p>Une offre payante pour les professionnels arrivera plus tard. Tu seras prévenue bien avant, et les testeuses de la bêta auront un tarif à part.</p>
+    <h3>J'ai mes propres enfants, ça se mélange ?</h3>
+    <p>Non : ton espace pro et l'espace de ta famille sont séparés, tu passes de l'un à l'autre avec le même compte.</p>
+    <p class="more"><a href="faq.html#pro">Toutes les questions fréquentes ›</a></p>
+    <footer class="gfoot">Tribu, l'organisation de la famille. Gratuit, sans pub, données hébergées en France. <a href="confidentialite.html">Confidentialité</a></footer>
+  </main>
+  <script>
+    fetch("https://mnblhbjfkvtiyaqetaib.supabase.co/rest/v1/rpc/pro_spots", { method: "POST", headers: { apikey: "sb_publishable_3iqSMZcndyhL9ZLWoRd9eQ_8XzVI2U2", "Content-Type": "application/json" }, body: "{}" })
+      .then((r) => r.json()).then((b) => { if (b && typeof b.left === "number") document.getElementById("spots").innerHTML = "👩‍🍼 Bêta pro ouverte à 50 professionnels · " + (b.left ? "encore <strong>" + b.left + "</strong> place" + (b.left > 1 ? "s" : "") : "<strong>complet</strong>"); })
+      .catch(() => {});
+  </script>
+</body>
+</html>

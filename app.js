@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 34;
+  const TRIBU_VERSION = 35;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -84,6 +84,8 @@
   (() => {
     const q = new URLSearchParams(location.search);
     const c = q.get("code"), pc = q.get("pro");
+    // Lien "Partager Tribu" : on repart de zéro, sans ancienne invitation gardée sur le téléphone
+    if (/^partage/.test(q.get("src") || "") && !c && !pc) { ls.set(INVITE_KEY, null); ls.set(PRO_LINK_KEY, null); }
     if (c) ls.set(INVITE_KEY, c.trim().toUpperCase().slice(0, 6));
     if (pc) ls.set(PRO_LINK_KEY, pc.trim().toUpperCase().slice(0, 6));
     if (q.get("espace") === "pro") ls.set(WANT_PRO_KEY, "1");

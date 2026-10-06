@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 37;
+  const TRIBU_VERSION = 38;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -141,7 +141,7 @@
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
     const fromDay = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
-    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms, ch, cd] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
@@ -152,8 +152,11 @@
       sb.from("vaccines_done").select("*").eq("household_id", hid),
       sb.from("child_shares").select("*, pros(display_name, kind)").eq("household_id", hid),
       sb.from("presences").select("*").eq("household_id", hid).gte("day", fromDay).order("arrived_at"),
-      sb.from("measures").select("*").eq("household_id", hid).order("measured_on")
+      sb.from("measures").select("*").eq("household_id", hid).order("measured_on"),
+      sb.from("chores").select("*").eq("household_id", hid).order("created_at"),
+      sb.from("chore_done").select("*").eq("household_id", hid).gte("day", ymd(new Date(Date.now() - 35 * 86400000)))
     ]);
+    state.chores = ch.data || []; state.choreDone = cd.data || [];
     state.measures = ms.data || [];
     state.shares = sh.data || [];
     state.presences = pr.data || [];
@@ -245,7 +248,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode === "pro") return; await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures", "chores", "chore_done"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -302,10 +305,11 @@
     else if (page === "enfant") body = viewChild(id);
     else if (page === "vaccins") body = viewVaccines(id);
     else if (page === "courses") body = viewShopping();
+    else if (page === "menage") body = viewChores();
     else if (page === "reglages") body = viewSettings();
     else if (page === "nouveautes") body = viewNews();
     else body = viewHome();
-    const active = page === "enfant" || page === "vaccins" ? "enfants" : page === "nouveautes" ? "reglages" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
+    const active = page === "enfant" || page === "vaccins" ? "enfants" : page === "nouveautes" ? "reglages" : page === "menage" ? "courses" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
     const showFab = active === "accueil" || page === "enfant";
     const st = mainScroll();
     $app.innerHTML = `
@@ -314,7 +318,7 @@
       <nav class="nav" aria-label="Navigation"><ul>
         ${navLink("accueil", "🏠", "Accueil", active)}
         ${navLink("enfants", "👪", "Famille", active)}
-        ${navLink("courses", "🛒", "Courses", active)}
+        ${navLink(ls.get("tribu_house_tab") === "menage" ? "menage" : "courses", "🧺", "Maison", active === "courses" ? (ls.get("tribu_house_tab") === "menage" ? "menage" : "courses") : active)}
         ${navLink("reglages", "⚙️", "Tribu", active)}
       </ul></nav>`;
     mainScroll(st);
@@ -721,6 +725,7 @@
       html += `<section class="day"><div class="day-title">💊 Traitements du jour <span class="muted small">${left ? left + " à donner" : "tout est donné ✓"}</span></div>${doses.map((d) => doseRow(d)).join("")}</section>`;
     }
 
+    html += choresHomeHtml();
     html += vaccinesHomeHtml();
 
     if (!state.children.length) {
@@ -817,7 +822,7 @@
   }
 
   function viewShopping() {
-    let html = `<header class="top"><h1>Courses</h1></header>
+    let html = `<header class="top"><h1>Courses</h1></header>${houseTabs("courses")}
       <form class="add-bar" id="shop-add">
         <input id="shop-name" placeholder="Ajouter un article" maxlength="100" aria-label="Article" autocomplete="off">
         <select id="shop-cat" aria-label="Rayon">${SHOP_CATS.map((c) => `<option>${c}</option>`).join("")}</select>
@@ -2133,6 +2138,10 @@
     $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
     $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
     bindNews();
+    $app.querySelectorAll("[data-chore-add]").forEach((b) => b.onclick = () => choreForm());
+    $app.querySelectorAll("[data-chore-edit]").forEach((b) => b.onclick = () => choreForm(state.chores.find((x) => x.id === b.dataset.choreEdit)));
+    $app.querySelectorAll("[data-chore-toggle]").forEach((b) => b.onclick = () => { b.disabled = true; const [id, day] = b.dataset.choreToggle.split("|"); toggleChore(id, day); });
+    { const pg = route()[0]; if (pg === "courses" || pg === "menage") ls.set("tribu_house_tab", pg); }
     $app.querySelectorAll("[data-measure-add]").forEach((b) => b.onclick = () => measureForm(b.dataset.measureAdd));
     $app.querySelectorAll("[data-measure-list]").forEach((b) => b.onclick = () => measureList(b.dataset.measureList));
     $app.querySelectorAll("[data-gmetric]").forEach((b) => b.onclick = () => { state.growthMetric = b.dataset.gmetric; render(); });
@@ -3073,6 +3082,163 @@
       <button class="btn ghost block" style="margin-top:12px" id="ml-close">Fermer</button>`, (el) => {
       el.querySelector("#ml-close").onclick = closeSheet;
       el.querySelectorAll("[data-medit]").forEach((b) => b.onclick = () => measureForm(cid, state.measures.find((x) => x.id === b.dataset.medit)));
+    });
+  }
+
+  // ---------- Planning de ménage ----------
+  const CHORE_TEMPLATES = [["🍽️", "Vaisselle"], ["🧹", "Aspirateur"], ["🧽", "Serpillière"], ["🧺", "Lessive"], ["👕", "Étendre et plier le linge"], ["🗑️", "Sortir les poubelles"], ["🛁", "Salle de bain"], ["🚽", "Toilettes"], ["🛏️", "Changer les draps"], ["🍳", "Cuisine"], ["🪴", "Arroser les plantes"], ["🧸", "Ranger la chambre"], ["🍽️", "Mettre la table"], ["🐾", "Nourrir l'animal"]];
+  const CHORE_EMOJIS = ["🧹", "🍽️", "🧽", "🧺", "👕", "🗑️", "🛁", "🚽", "🛏️", "🍳", "🪴", "🧸", "🐾", "🪟", "🚗", "✨"];
+  // Qui peut faire les tâches : les membres de la tribu et les enfants de plus de 3 ans
+  function chorePeople() {
+    const kids = state.children.filter((c) => !isAdult(c) && (!c.birth_date || monthsAt(c.birth_date, ymd(new Date())) >= 36));
+    return state.members.map((m) => ({ code: "u:" + m.user_id, name: m.display_name, ico: "🧑" }))
+      .concat(kids.map((c) => ({ code: "c:" + c.id, name: c.first_name, ico: c.emoji || "🧒", color: c.color })));
+  }
+  const personOf = (code) => chorePeople().find((p) => p.code === code);
+  const meCode = () => "u:" + state.session.user.id;
+  function choreOn(ch, d) {
+    const start = parseYmd(ch.start_date);
+    if (startOfDay(d) < start || !ch.weekdays.includes(isoDow(d))) return false;
+    const weeks = Math.round((mondayOf(d) - mondayOf(start)) / (7 * 86400000));
+    return weeks % (ch.interval_weeks || 1) === 0;
+  }
+  // À tour de rôle : on compte les fois où la tâche revient depuis le début
+  function choreWho(ch, d) {
+    const rot = (ch.rotation || []).filter((c) => personOf(c));
+    if (rot.length) {
+      let n = 0; const x = parseYmd(ch.start_date); const end = startOfDay(d);
+      while (x < end) { if (choreOn(ch, x)) n++; x.setDate(x.getDate() + 1); }
+      return rot[n % rot.length];
+    }
+    return ch.assignee && personOf(ch.assignee) ? ch.assignee : null;
+  }
+  const choreDone = (chId, day) => (state.choreDone || []).find((x) => x.chore_id === chId && x.day === day);
+  function choresOf(day) {
+    const d = parseYmd(day);
+    return (state.chores || []).filter((ch) => choreOn(ch, d)).map((ch) => ({ ch, day, who: choreWho(ch, d), done: choreDone(ch.id, day) }));
+  }
+  function choreRow(x, compact) {
+    const p = x.who ? personOf(x.who) : null;
+    const by = x.done && x.done.done_by_code && x.done.done_by_code !== x.who ? personOf(x.done.done_by_code) : null;
+    return `<div class="item ${x.done ? "done" : ""}" style="--c:${esc(p && p.color ? p.color : "var(--accent)")}">
+      <div class="tab"></div>
+      <div class="body" ${compact ? `data-go="#/menage"` : `data-chore-edit="${x.ch.id}"`} role="button" tabindex="0">
+        <div class="line1"><span class="title">${esc(x.ch.emoji)} ${esc(x.ch.name)}</span></div>
+        <div class="meta">${p ? `${esc(p.name)}${(x.ch.rotation || []).length ? " (à tour de rôle)" : ""}` : "N'importe qui"}${x.done ? ` · fait${by ? " par " + esc(by.name) : ""}` : ""}</div>
+      </div>
+      <button class="check" data-chore-toggle="${x.ch.id}|${x.day}" aria-label="${x.done ? "Annuler" : "Marquer comme fait"}"><i>${x.done ? "✓" : ""}</i></button>
+    </div>`;
+  }
+  function choreSchedule(ch) {
+    const days = ch.weekdays.length === 7 ? "tous les jours" : ch.weekdays.slice().sort().map((n) => DAY_SHORT[n - 1]).join(", ");
+    const rot = (ch.rotation || []).map(personOf).filter(Boolean);
+    const who = rot.length ? "à tour de rôle : " + rot.map((p) => p.name).join(", ") : ch.assignee && personOf(ch.assignee) ? personOf(ch.assignee).name : "n'importe qui";
+    return `${days}${ch.interval_weeks > 1 ? ` · toutes les ${ch.interval_weeks} semaines` : ""} · ${who}`;
+  }
+  function houseTabs(cur) {
+    return `<div class="seg house-tabs"><button data-go="#/courses" aria-pressed="${cur === "courses"}">🛒 Courses</button><button data-go="#/menage" aria-pressed="${cur === "menage"}">🧹 Ménage</button></div>`;
+  }
+  function viewChores() {
+    const today = ymd(new Date());
+    let html = `<header class="top"><h1>Ménage</h1></header>${houseTabs("menage")}`;
+    if (!(state.chores || []).length) return html + `<div class="empty"><strong>Aucune tâche pour l'instant</strong><br>Répartis le ménage entre les membres de la tribu, et même les enfants : chacun voit ce qu'il a à faire aujourd'hui.</div>
+      <button class="btn block" data-chore-add>+ Ajouter une tâche</button>`;
+    const td = choresOf(today);
+    html += `<h2>Aujourd'hui</h2>${td.length ? td.map((x) => choreRow(x)).join("") : `<p class="muted small">Rien de prévu aujourd'hui.</p>`}`;
+    // La semaine
+    const mon = mondayOf(new Date());
+    html += `<h2>Cette semaine</h2><div class="card week">`;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(mon); d.setDate(mon.getDate() + i);
+      const ds = ymd(d), list = choresOf(ds);
+      html += `<div class="wk-row ${ds === today ? "today" : ""}"><span class="wk-day">${DAY_SHORT[i]}</span><span class="wk-list">${list.length ? list.map((x) => { const p = x.who ? personOf(x.who) : null; return `<span class="wk-chip ${x.done ? "done" : ""}" title="${esc(x.ch.name)}">${esc(x.ch.emoji)}${p ? " " + esc(p.name) : ""}</span>`; }).join("") : `<span class="muted small">-</span>`}</span></div>`;
+    }
+    html += `</div>`;
+    // Étoiles de la semaine
+    const stars = {};
+    (state.choreDone || []).filter((x) => x.day >= ymd(mon) && x.day <= today && x.done_by_code).forEach((x) => { stars[x.done_by_code] = (stars[x.done_by_code] || 0) + 1; });
+    const ranking = Object.entries(stars).map(([code, n]) => [personOf(code), n]).filter(([p]) => p).sort((a, b) => b[1] - a[1]);
+    if (ranking.length) html += `<h2>⭐ Étoiles de la semaine</h2><div class="card">${ranking.map(([p, n], i) => `<div class="member"><span>${i === 0 ? "🏆 " : ""}${esc(p.name)}</span><span>${"⭐".repeat(Math.min(n, 10))}${n > 10 ? " +" + (n - 10) : ""} <span class="muted small">${n}</span></span></div>`).join("")}</div>`;
+    html += `<h2>Toutes les tâches</h2>${state.chores.map((ch) => `<div class="item" style="--c:var(--line)"><div class="tab"></div><div class="body" data-chore-edit="${ch.id}" role="button" tabindex="0"><div class="line1"><span class="title">${esc(ch.emoji)} ${esc(ch.name)}</span></div><div class="meta">${esc(choreSchedule(ch))}</div></div></div>`).join("")}
+      <button class="btn block" style="margin-top:6px" data-chore-add>+ Ajouter une tâche</button>`;
+    return html;
+  }
+  function choresHomeHtml() {
+    const td = choresOf(ymd(new Date()));
+    if (!td.length) return "";
+    const mine = td.filter((x) => !x.who || x.who === meCode() || x.who.startsWith("c:"));
+    const left = td.filter((x) => !x.done).length;
+    return `<h2>🧹 Ménage du jour <span class="muted small" style="font-weight:400">${left ? left + " à faire" : "tout est fait 🎉"}</span></h2>${(mine.length ? mine : td).slice(0, 5).map((x) => choreRow(x, true)).join("")}${td.length > 5 || mine.length < td.length ? `<button class="link small" data-go="#/menage">Voir tout le planning ›</button>` : ""}`;
+  }
+  async function toggleChore(chId, day) {
+    const ch = state.chores.find((x) => x.id === chId); if (!ch) return;
+    const done = choreDone(chId, day);
+    if (done) { await sb.from("chore_done").delete().eq("id", done.id); }
+    else {
+      const who = choreWho(ch, parseYmd(day));
+      // Tâche d'un enfant : l'étoile va à l'enfant (c'est un parent qui coche). Sinon, à celui qui coche.
+      const doneBy = who && who.startsWith("c:") ? who : meCode();
+      const { error } = await sb.from("chore_done").insert({ household_id: state.household.id, chore_id: chId, day, done_by_code: doneBy, created_by: state.session.user.id });
+      if (error) return toast(errMsg(error));
+      toast(`${ch.emoji} ${ch.name} : fait !`);
+    }
+    await loadAll(); render();
+  }
+  function choreForm(ch) {
+    const v = ch || { name: "", emoji: "🧹", weekdays: [], interval_weeks: 1, assignee: null, rotation: [], start_date: ymd(new Date()) };
+    let emoji = v.emoji, days = new Set(v.weekdays), interval = v.interval_weeks || 1;
+    let mode = (v.rotation || []).length ? "tour" : v.assignee ? "one" : "any";
+    let one = v.assignee, rot = new Set(v.rotation || []);
+    const people = chorePeople();
+    openSheet(`<h2 style="margin-top:0">${ch ? "Modifier la tâche" : "Nouvelle tâche"}</h2><form id="cf">
+      ${ch ? "" : `<div class="tpl">${CHORE_TEMPLATES.map(([e, n]) => `<button type="button" class="chip-t" data-tpl="${e}|${esc(n)}">${e} ${esc(n)}</button>`).join("")}</div>`}
+      <label for="cf-n">Tâche</label><input id="cf-n" required maxlength="60" value="${esc(v.name)}" placeholder="Ex : Aspirateur du salon">
+      <div class="seg emoji-seg" id="cf-e" style="margin-top:8px">${CHORE_EMOJIS.map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
+      <label>Jours</label>
+      <div class="days" id="cf-d">${DAY_LETTER.map((l, i) => `<button type="button" data-v="${i + 1}" aria-pressed="${days.has(i + 1)}" aria-label="${DAY_SHORT[i]}">${l}</button>`).join("")}</div>
+      <button type="button" class="link small" id="cf-all">Tous les jours</button>
+      <label>Ça se répète</label>
+      <div class="seg" id="cf-i">${[[1, "Chaque semaine"], [2, "Toutes les 2 semaines"], [4, "Toutes les 4 semaines"]].map(([n, l]) => `<button type="button" data-v="${n}" aria-pressed="${n === interval}">${l}</button>`).join("")}</div>
+      <label>Qui s'en occupe</label>
+      <div class="seg" id="cf-m">${[["any", "N'importe qui"], ["one", "Une personne"], ["tour", "À tour de rôle"]].map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${k === mode}">${l}</button>`).join("")}</div>
+      <div id="cf-p" style="margin-top:10px"></div>
+      <div class="actions">${ch ? `<button type="button" class="btn danger" id="cf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="cf-x">Annuler</button>`}<button class="btn" type="submit">Enregistrer</button></div></form>`, (el) => {
+      const seg = (id, fn) => el.querySelector(id).onclick = (e) => { const b = e.target.closest("button"); if (!b) return; fn(b); };
+      const drawPeople = () => {
+        const box = el.querySelector("#cf-p");
+        if (mode === "any") { box.innerHTML = ""; return; }
+        box.innerHTML = `<div class="seg">${people.map((p) => `<button type="button" data-p="${p.code}" aria-pressed="${mode === "one" ? one === p.code : rot.has(p.code)}">${esc(p.ico)} ${esc(p.name)}</button>`).join("")}</div>
+          ${mode === "tour" ? `<p class="muted small" style="margin:6px 0 0">Choisis au moins 2 personnes : elles alternent à chaque fois que la tâche revient.</p>` : ""}`;
+        box.querySelectorAll("[data-p]").forEach((b) => b.onclick = () => {
+          if (mode === "one") one = b.dataset.p; else rot.has(b.dataset.p) ? rot.delete(b.dataset.p) : rot.add(b.dataset.p);
+          drawPeople();
+        });
+      };
+      drawPeople();
+      seg("#cf-e", (b) => { emoji = b.dataset.v; el.querySelectorAll("#cf-e button").forEach((x) => x.setAttribute("aria-pressed", x === b)); });
+      seg("#cf-d", (b) => { const n = +b.dataset.v; days.has(n) ? days.delete(n) : days.add(n); b.setAttribute("aria-pressed", days.has(n)); });
+      el.querySelector("#cf-all").onclick = () => { days = new Set([1, 2, 3, 4, 5, 6, 7]); el.querySelectorAll("#cf-d button").forEach((x) => x.setAttribute("aria-pressed", "true")); };
+      seg("#cf-i", (b) => { interval = +b.dataset.v; el.querySelectorAll("#cf-i button").forEach((x) => x.setAttribute("aria-pressed", x === b)); });
+      seg("#cf-m", (b) => { mode = b.dataset.v; el.querySelectorAll("#cf-m button").forEach((x) => x.setAttribute("aria-pressed", x === b)); drawPeople(); });
+      el.querySelectorAll("[data-tpl]").forEach((b) => b.onclick = () => {
+        const [e, n] = b.dataset.tpl.split("|"); el.querySelector("#cf-n").value = n; emoji = e;
+        el.querySelectorAll("#cf-e button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === e));
+      });
+      const x = el.querySelector("#cf-x"); if (x) x.onclick = closeSheet;
+      const del = el.querySelector("#cf-del");
+      if (del) del.onclick = async () => { if (!confirm("Supprimer cette tâche et son historique ?")) return; await sb.from("chores").delete().eq("id", ch.id); closeSheet(); await loadAll(); render(); toast("Tâche supprimée"); };
+      el.querySelector("#cf").onsubmit = async (e) => {
+        e.preventDefault();
+        if (!days.size) return toast("Choisis au moins un jour");
+        if (mode === "one" && !one) return toast("Choisis qui s'en occupe");
+        if (mode === "tour" && rot.size < 2) return toast("Choisis au moins 2 personnes");
+        const row = { name: el.querySelector("#cf-n").value.trim(), emoji, weekdays: [...days].sort(), interval_weeks: interval,
+          assignee: mode === "one" ? one : null, rotation: mode === "tour" ? people.map((p) => p.code).filter((c) => rot.has(c)) : [] };
+        const { error } = ch ? await sb.from("chores").update(row).eq("id", ch.id)
+          : await sb.from("chores").insert({ ...row, household_id: state.household.id, start_date: ymd(mondayOf(new Date())), created_by: state.session.user.id });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast("Tâche enregistrée");
+      };
     });
   }
 

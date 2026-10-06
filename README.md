@@ -1,20 +1,38 @@
-# Tribu
+<p align="center">
+  <img src="og.png" alt="Tribu, l'organisation de la famille" width="720">
+</p>
 
-Organisation familiale en PWA : enfants, rendez-vous, tâches, santé, tailles et courses partagées, synchronisés en temps réel entre les membres de la famille.
+# Tribu (bêta)
 
-by @jeremstyke
+**L'organisation de la famille, à jour pour chaque parent.**
+Rendez-vous, activités, traitements, journal de bébé, album photo et courses, partagés en temps réel entre les membres de la famille.
 
-## Stack
-- HTML / CSS / JavaScript vanilla
-- Supabase (auth, base Postgres avec RLS, temps réel), projet `tribu` hébergé à Paris (eu-west-3)
-- Hébergement : GitHub Pages
+👉 **Ouvrir Tribu sur ton téléphone : [jeremstyke.github.io/tribu](https://jeremstyke.github.io/tribu/)**
 
-## Déploiement
-1. Créer le repo `tribu` sur GitHub et y pousser ces fichiers à la racine.
-2. Settings > Pages > Deploy from a branch > `main` / root.
-3. L'app est en ligne sur https://jeremstyke.github.io/tribu/
+Tribu s'utilise uniquement sur téléphone (iPhone ou Android), en l'installant sur l'écran d'accueil. Gratuit, sans publicité.
 
-## Configuration Supabase (une seule fois)
-Authentication > URL Configuration :
-- Site URL : https://jeremstyke.github.io/tribu/
-- Redirect URLs : https://jeremstyke.github.io/tribu/**
+## Fonctionnalités
+
+- 👪 **Profils** pour chaque enfant et chaque parent, avec couleur, photo et options qui s'adaptent à l'âge
+- 🍼 **Journal bébé** : biberons, tétées, couches, dodos, repas, bains, température
+- 📅 **Rendez-vous, tâches et notes**, avec rappels la veille et 1 h avant
+- 🎯 **Activités extrascolaires** récurrentes, avec qui dépose et qui récupère
+- 💊 **Traitements réguliers** : prises du jour à cocher, rappels et relances
+- 📸 **Album photo** privé par enfant, avec notes
+- 🛒 **Liste de courses** partagée
+- 📆 **Synchronisation** avec l'agenda de l'iPhone ou Google Agenda
+- 🔔 **Notifications** sur le téléphone
+- 🔐 **Connexion Face ID / empreinte**, sans mot de passe
+
+## Aide et confidentialité
+
+- [Questions fréquentes](https://jeremstyke.github.io/tribu/faq.html)
+- [Politique de confidentialité](https://jeremstyke.github.io/tribu/confidentialite.html) : données hébergées en France, jamais vendues ni utilisées pour de la publicité
+
+## Bêta
+
+Tribu évolue chaque semaine. Un bug, une idée ? Bouton "Signaler un bug ou une idée" dans l'app, ou [juryjeremy@gmail.com](mailto:juryjeremy@gmail.com).
+
+---
+
+by [@jeremstyke](https://t.me/jeremstyke) · © 2026 Jeremy (jeremstyke), tous droits réservés.

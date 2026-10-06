@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 31;
+  const TRIBU_VERSION = 32;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -302,6 +302,7 @@
     else body = viewHome();
     const active = page === "enfant" || page === "vaccins" ? "enfants" : (["enfants", "courses", "reglages"].includes(page) ? page : "accueil");
     const showFab = active === "accueil" || page === "enfant";
+    const st = mainScroll();
     $app.innerHTML = `
       <main class="wrap">${body}</main>
       ${showFab ? `<button class="fab" id="fab" aria-label="Ajouter un élément">+</button>` : ""}
@@ -311,7 +312,14 @@
         ${navLink("courses", "🛒", "Courses", active)}
         ${navLink("reglages", "⚙️", "Tribu", active)}
       </ul></nav>`;
+    mainScroll(st);
     bindCommon();
+  }
+  // La page défile dans <main> (la barre du bas ne bouge jamais) : on garde la position entre deux rafraîchissements
+  function mainScroll(set) {
+    const m = $app.querySelector("main.wrap");
+    if (set === undefined) return m ? m.scrollTop : 0;
+    if (m) m.scrollTop = set;
   }
   const navLink = (key, ico, label, active) =>
     `<li><a href="#/${key}" ${active === key ? 'aria-current="page"' : ""}><span class="ico" aria-hidden="true">${ico}</span>${label}</a></li>`;
@@ -2475,10 +2483,12 @@
     else if (page === "reglages") body = viewProSettings();
     else body = viewProHome();
     const active = page === "heures" || page === "reglages" ? page : "accueil";
+    const st = mainScroll();
     $app.innerHTML = `<main class="wrap">${body}</main>
       <nav class="nav" aria-label="Navigation"><ul>
         ${navLink("accueil", "🏠", "Enfants", active)}${navLink("heures", "⏱️", "Heures", active)}${navLink("reglages", "⚙️", "Réglages", active)}
       </ul></nav>`;
+    mainScroll(st);
     bindCommon();
   }
 
@@ -2785,7 +2795,7 @@
 
   // ---------- Boot ----------
   // L'accueil s'ouvre toujours sur "Tous"
-  window.addEventListener("hashchange", () => { closeSheet(); if (route()[0] === "accueil") state.filter = "all"; render(); window.scrollTo(0, 0); });
+  window.addEventListener("hashchange", () => { closeSheet(); if (route()[0] === "accueil") state.filter = "all"; render(); mainScroll(0); window.scrollTo(0, 0); });
   document.addEventListener("click", (e) => {
     const a = e.target.closest && e.target.closest('.nav a[href="#/accueil"]');
     if (a && route()[0] === "accueil" && state.filter !== "all") { state.filter = "all"; render(); }

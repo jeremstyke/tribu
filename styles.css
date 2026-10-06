@@ -356,3 +356,10 @@ textarea { width: 100%; resize: vertical; }
 .role-card { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--radius-lg); padding: 18px 16px; margin: 0 0 12px; cursor: pointer; color: inherit; font: inherit; }
 .role-card:active, .role-card:hover { border-color: var(--accent); }
 .rc-ico { font-size: 2rem; flex: none; }
+
+/* Écrans avec barre du bas : seule la zone de contenu défile, la barre reste collée en bas (iPhone compris) */
+html:has(#app > .nav), html:has(#app > .nav) body { height: 100%; overflow: hidden; }
+#app:has(> .nav) { height: 100%; display: flex; flex-direction: column; }
+#app:has(> .nav) > main.wrap { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding-bottom: 96px; }
+#app:has(> .nav) > .nav { position: relative; flex: 0 0 auto; }
+#app:has(> .nav) > .fab { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }

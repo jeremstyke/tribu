@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 30;
+  const TRIBU_VERSION = 31;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -281,7 +281,11 @@
     if (isDesktop()) return renderDesktop();
     if (!state.session) return renderAuth();
     if (state.mode === "pro" && state.pro) return renderPro();
-    if (!state.household) return ls.get(WANT_PRO_KEY) && !state.pro ? renderProOnboarding() : renderOnboarding();
+    if (!state.household) {
+      if (ls.get(WANT_PRO_KEY) && !state.pro) return renderProOnboarding();
+      if (!state.pro && !state.roleChosen && !ls.get(PRO_LINK_KEY) && !pendingInvite()) return renderRoleChoice();
+      return renderOnboarding();
+    }
     const pl = ls.get(PRO_LINK_KEY);
     if (pl && !state.proLinkShown) {
       state.proLinkShown = true;
@@ -2478,6 +2482,21 @@
     bindCommon();
   }
 
+  // Premier écran après l'inscription : parent ou professionnel ?
+  function renderRoleChoice() {
+    $app.innerHTML = `<div class="hero">
+      <h1>Bienvenue 👋</h1>
+      <p class="lead">Tu utilises Tribu en tant que :</p>
+      <button class="role-card" data-role="famille"><span class="rc-ico" aria-hidden="true">👪</span><span><strong>Parent</strong><br><span class="muted small">J'organise la vie de ma famille : enfants, rendez-vous, courses.</span></span></button>
+      <button class="role-card" data-role="pro"><span class="rc-ico" aria-hidden="true">👩‍🍼</span><span><strong>Assistante maternelle, nounou ou micro-crèche</strong><br><span class="muted small">Je suis la journée des enfants qu'on me confie.</span></span></button>
+      <p class="muted small" style="margin-top:14px">Tu es les deux ? Commence par l'un, tu pourras ajouter l'autre ensuite avec le même compte.</p>
+      <button class="link small muted" id="logout">Se déconnecter</button></div>`;
+    $app.querySelectorAll("[data-role]").forEach((b) => b.onclick = () => {
+      state.roleChosen = b.dataset.role;
+      if (b.dataset.role === "pro") renderProOnboarding(); else render();
+    });
+    document.getElementById("logout").onclick = () => sb.auth.signOut();
+  }
   function renderProOnboarding() {
     const full = state.proBeta && state.proBeta.left <= 0;
     if (!state.proBeta && !state.proBetaTried) { state.proBetaTried = true; proSpots().then(() => renderProOnboarding()); }
@@ -2498,7 +2517,7 @@
       <button class="link small muted" id="logout">Se déconnecter</button></div>`;
     if (full) bindWaitlist("pro");
     document.getElementById("logout").onclick = () => sb.auth.signOut();
-    document.getElementById("pro-back").onclick = () => { ls.set(WANT_PRO_KEY, null); state.mode = "famille"; render(); };
+    document.getElementById("pro-back").onclick = () => { ls.set(WANT_PRO_KEY, null); state.mode = "famille"; state.roleChosen = "famille"; render(); };
     const f = document.getElementById("pro-onb"); if (!f) return;
     let kind = "assmat";
     f.querySelector("#pk").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; kind = b.dataset.v; f.querySelectorAll("#pk button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
@@ -2794,7 +2813,7 @@
     }
     if (!session) {
       if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
-      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], memberships: [], passkeys: [], photoUrls: {}, mode: "famille", pro: null, proKids: [], presences: [], shares: [], hasFamily: false, proLinkShown: false });
+      Object.assign(state, { household: null, children: [], items: [], shopping: [], photos: [], logs: [], activities: [], treatments: [], vaccines: [], members: [], memberships: [], passkeys: [], photoUrls: {}, mode: "famille", pro: null, proKids: [], presences: [], shares: [], hasFamily: false, proLinkShown: false, roleChosen: null });
       return render();
     }
     if (!booted || prev !== session.user.id) {

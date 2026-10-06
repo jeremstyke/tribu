@@ -352,3 +352,7 @@ details.hours[open] summary { margin-bottom: 8px; }
 .check-row { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 8px 0; margin: 0; }
 .check-row input { width: 22px; height: 22px; accent-color: var(--accent); }
 textarea { width: 100%; resize: vertical; }
+
+.role-card { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--radius-lg); padding: 18px 16px; margin: 0 0 12px; cursor: pointer; color: inherit; font: inherit; }
+.role-card:active, .role-card:hover { border-color: var(--accent); }
+.rc-ico { font-size: 2rem; flex: none; }

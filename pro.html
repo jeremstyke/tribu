@@ -4,22 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tribu Pro : l'appli des assistantes maternelles et nounous (bêta gratuite)</title>
-  <meta name="description" content="Pointage des arrivées et départs, heures du mois pour Pajemploi, journal des repas, siestes et couches, traitements et cahier de liaison avec les parents. Bêta gratuite ouverte à 50 professionnels.">
+  <meta name="description" content="Pointage des arrivées et départs, heures du mois pour Pajemploi, journal des repas, siestes et couches, traitements et cahier de liaison avec les parents. Bêta gratuite ouverte à 15 professionnels.">
   <link rel="canonical" href="https://jeremstyke.github.io/tribu/pro.html">
   <meta name="theme-color" content="#1F2D4D">
   <meta property="og:title" content="Tribu Pro : l'appli des assistantes maternelles et nounous">
-  <meta property="og:description" content="Arrivées et départs, heures du mois, journal et cahier de liaison avec les parents. Bêta gratuite ouverte à 50 professionnels.">
+  <meta property="og:description" content="Arrivées et départs, heures du mois, journal et cahier de liaison avec les parents. Bêta gratuite ouverte à 15 professionnels.">
   <meta property="og:image" content="https://jeremstyke.github.io/tribu/og.png?v=1">
   <meta property="og:url" content="https://jeremstyke.github.io/tribu/pro.html">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=23">
-  <link rel="stylesheet" href="guides/guides.css?v=23">
+  <link rel="stylesheet" href="styles.css?v=24">
+  <link rel="stylesheet" href="guides/guides.css?v=24">
 </head>
 <body>
   <main class="guide">
     <a href="./" class="back">‹ Tribu</a>
     <h1>Tribu Pro, pour les assistantes maternelles et les nounous</h1>
-    <p><span id="spots" class="beta-pill">👩‍🍼 Bêta pro ouverte à 50 professionnels</span></p>
+    <p><span id="spots" class="beta-pill">👩‍🍼 Bêta pro ouverte à 15 professionnels</span></p>
     <p class="intro">Fini le cahier de liaison qui se perd et les heures notées sur un coin de papier. Tu notes la journée de chaque enfant en deux appuis, les parents la suivent en direct.</p>
 
     <h2>Ce que tu fais avec Tribu Pro</h2>
@@ -53,7 +53,7 @@
   </main>
   <script>
     fetch("https://mnblhbjfkvtiyaqetaib.supabase.co/rest/v1/rpc/pro_spots", { method: "POST", headers: { apikey: "sb_publishable_3iqSMZcndyhL9ZLWoRd9eQ_8XzVI2U2", "Content-Type": "application/json" }, body: "{}" })
-      .then((r) => r.json()).then((b) => { if (b && typeof b.left === "number") document.getElementById("spots").innerHTML = "👩‍🍼 Bêta pro ouverte à 50 professionnels · " + (b.left ? "encore <strong>" + b.left + "</strong> place" + (b.left > 1 ? "s" : "") : "<strong>complet</strong>"); })
+      .then((r) => r.json()).then((b) => { if (b && typeof b.left === "number") document.getElementById("spots").innerHTML = "👩‍🍼 Bêta pro ouverte à " + (b.limit || 15) + " professionnels · " + (b.left ? "encore <strong>" + b.left + "</strong> place" + (b.left > 1 ? "s" : "") : "<strong>complet</strong>"); })
       .catch(() => {});
   </script>
 </body>

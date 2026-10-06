@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 23;
+  const TRIBU_VERSION = 24;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -66,8 +66,8 @@
     if (/already registered/i.test(m)) return "Un compte existe déjà avec cet email. Connecte-toi.";
     if (/Password should be/i.test(m)) return "Le mot de passe doit faire au moins 6 caractères.";
     if (/quota photos/i.test(m)) return "L'album de ta tribu est plein (100 photos). Supprime des photos pour en ajouter.";
-    if (/beta_full/i.test(m)) return "La bêta est complète : les 100 places sont prises. Rejoins une tribu existante avec un code d'invitation.";
-    if (/pro_full/i.test(m)) return "La bêta pro est complète : les 50 places sont prises.";
+    if (/beta_full/i.test(m)) return "La bêta est complète : toutes les places sont prises. Rejoins une tribu existante avec un code d'invitation.";
+    if (/pro_full/i.test(m)) return "La bêta pro est complète : toutes les places sont prises.";
     if (/code pro invalide/i.test(m)) return "Ce code ne correspond à aucune nounou. Vérifie-le avec elle.";
     if (/not allowed/i.test(m)) return "Tu n'as pas accès à cet enfant.";
     if (/code invalide/i.test(m)) return "Ce code ne correspond à aucune tribu. Vérifie-le.";
@@ -484,10 +484,10 @@
     }
   }
 
-  // ---------- Bêta limitée à 100 familles ----------
-  const BETA_LIMIT = 100;
+  // ---------- Bêta limitée (le nombre de places vient de la base) ----------
+  let BETA_LIMIT = 25;
   async function betaSpots() {
-    try { const { data } = await sb.rpc("beta_spots"); if (data) state.beta = data; } catch (_) {}
+    try { const { data } = await sb.rpc("beta_spots"); if (data) { state.beta = data; if (data.limit) BETA_LIMIT = data.limit; } } catch (_) {}
     return state.beta;
   }
   const betaPill = () => {
@@ -2218,10 +2218,10 @@
   }
 
   // ---------- Espace pro (assistantes maternelles, nounous, micro-crèches) ----------
-  const PRO_LIMIT = 50;
+  let PRO_LIMIT = 15;
   const PRO_KINDS = { assmat: "Assistante maternelle", nounou: "Nounou à domicile", creche: "Micro-crèche" };
   async function proSpots() {
-    try { const { data } = await sb.rpc("pro_spots"); if (data) state.proBeta = data; } catch (_) {}
+    try { const { data } = await sb.rpc("pro_spots"); if (data) { state.proBeta = data; if (data.limit) PRO_LIMIT = data.limit; } } catch (_) {}
     return state.proBeta;
   }
   const proPill = () => {

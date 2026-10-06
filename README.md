@@ -31,7 +31,7 @@ Tribu s'utilise uniquement sur téléphone (iPhone ou Android), en l'installant 
 
 ## Bêta
 
-Bêta ouverte à 100 familles pour l'instant. Tribu évolue chaque semaine. Un bug, une idée ? Bouton "Signaler un bug ou une idée" dans l'app, ou [juryjeremy@gmail.com](mailto:juryjeremy@gmail.com).
+Bêta ouverte à 25 familles pour l'instant. Tribu évolue chaque semaine. Un bug, une idée ? Bouton "Signaler un bug ou une idée" dans l'app, ou [juryjeremy@gmail.com](mailto:juryjeremy@gmail.com).
 
 ---
 
@@ -44,6 +44,6 @@ by [@jeremstyke](https://t.me/jeremstyke) · © 2026 Jeremy (jeremstyke), tous d
 - [Organiser les activités des enfants](https://jeremstyke.github.io/tribu/guides/planning-activites-enfants.html)
 - [Planning de garde alternée](https://jeremstyke.github.io/tribu/guides/garde-alternee-planning.html)
 
-## Tribu Pro (bêta, 50 professionnels)
+## Tribu Pro (bêta, 15 professionnels)
 
 Espace pour les assistantes maternelles, nounous et micro-crèches : arrivées et départs, heures du mois, journal, traitements et cahier de liaison avec les parents. [En savoir plus](https://jeremstyke.github.io/tribu/pro.html)

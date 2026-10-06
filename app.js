@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 36;
+  const TRIBU_VERSION = 37;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -44,9 +44,9 @@
     const s = new Date(d).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
-  const age = (birth) => {
+  const age = (birth, at) => {
     if (!birth) return "";
-    const b = new Date(birth), n = new Date();
+    const b = new Date(birth), n = at || new Date();
     let months = (n.getFullYear() - b.getFullYear()) * 12 + (n.getMonth() - b.getMonth());
     if (n.getDate() < b.getDate()) months--;
     if (months < 0) return "";
@@ -141,7 +141,7 @@
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
     const fromDay = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
-    const [c, i, s, ph, lg, ac, tr, vc, sh, pr] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
@@ -151,8 +151,10 @@
       sb.from("treatments").select("*").eq("household_id", hid).order("created_at"),
       sb.from("vaccines_done").select("*").eq("household_id", hid),
       sb.from("child_shares").select("*, pros(display_name, kind)").eq("household_id", hid),
-      sb.from("presences").select("*").eq("household_id", hid).gte("day", fromDay).order("arrived_at")
+      sb.from("presences").select("*").eq("household_id", hid).gte("day", fromDay).order("arrived_at"),
+      sb.from("measures").select("*").eq("household_id", hid).order("measured_on")
     ]);
+    state.measures = ms.data || [];
     state.shares = sh.data || [];
     state.presences = pr.data || [];
     state.children = (c.data || []).sort((a, b) => (a.kind === "adulte") - (b.kind === "adulte"));
@@ -243,7 +245,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode === "pro") return; await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -776,6 +778,7 @@
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
+    html += growthSectionHtml(c);
     html += proSectionHtml(c);
     html += vaccinesSummaryHtml(c);
     const trts = state.treatments.filter((t) => t.child_id === id);
@@ -2130,6 +2133,15 @@
     $app.querySelectorAll("[data-pres-edit]").forEach((b) => b.onclick = (e) => { e.preventDefault(); const [cid, day] = b.dataset.presEdit.split("|"); presSheet(cid, day); });
     $app.querySelectorAll("[data-pro-share]").forEach((b) => b.onclick = proShare);
     bindNews();
+    $app.querySelectorAll("[data-measure-add]").forEach((b) => b.onclick = () => measureForm(b.dataset.measureAdd));
+    $app.querySelectorAll("[data-measure-list]").forEach((b) => b.onclick = () => measureList(b.dataset.measureList));
+    $app.querySelectorAll("[data-gmetric]").forEach((b) => b.onclick = () => { state.growthMetric = b.dataset.gmetric; render(); });
+    $app.querySelectorAll("[data-sex]").forEach((b) => b.onclick = async () => {
+      const [cid, sx] = b.dataset.sex.split("|");
+      const { error } = await sb.from("children").update({ sex: sx }).eq("id", cid);
+      if (error) return toast(errMsg(error));
+      await loadAll(); render();
+    });
     $app.querySelectorAll("[data-share-app]").forEach((b) => b.onclick = () => shareApp(b.dataset.shareApp === "pro"));
     $app.querySelectorAll("[data-share-add]").forEach((b) => b.onclick = () => shareSheet(b.dataset.shareAdd));
     $app.querySelectorAll("[data-share-del]").forEach((b) => b.onclick = async () => {
@@ -2802,6 +2814,12 @@
         state.vaccines.filter((x) => x.child_id === cid && x.vaccine_key.startsWith("autre-")).forEach((x) => rows.push(["Autre", x.note || "Vaccin", "Fait le " + parseYmd(x.done_on).toLocaleDateString("fr-FR")]));
         pdf.table([{ label: "Âge", w: 26 }, { label: "Vaccin", w: 92 }, { label: "Statut", w: 60 }], rows);
       }
+      const ms = childMeasures(cid);
+      if (ms.length) {
+        pdf.h2("Croissance");
+        pdf.table([{ label: "Date", w: 34 }, { label: "Âge", w: 30 }, { label: "Poids", w: 30 }, { label: "Taille", w: 30 }, { label: "Périmètre crânien", w: 54 }],
+          ms.slice().reverse().map((x) => [parseYmd(x.measured_on).toLocaleDateString("fr-FR"), age(c.birth_date, parseYmd(x.measured_on)) || "", x.weight_kg != null ? fmtNum(x.weight_kg, 3) + " kg" : "", x.height_cm != null ? fmtNum(x.height_cm, 1) + " cm" : "", x.head_cm != null ? fmtNum(x.head_cm, 1) + " cm" : ""]));
+      }
       const health = (logs || []).filter((l) => ["medicament", "temperature"].includes(l.kind));
       pdf.h2("Médicaments et températures (14 derniers jours)");
       if (health.length) pdf.table([{ label: "Date", w: 46 }, { label: "Type", w: 34 }, { label: "Détail", w: 98 }],
@@ -2918,6 +2936,143 @@
         if (error) return toast(errMsg(error));
         closeSheet(); await loadNews(); render(); toast("Nouveauté publiée");
       };
+    });
+  }
+
+  // ---------- Courbes de croissance (références OMS 0-5 ans) ----------
+  const GROWTH = {
+    weight_kg: { key: "wfa", label: "Poids", unit: "kg", dec: 2, short: "Poids" },
+    height_cm: { key: "lhfa", label: "Taille", unit: "cm", dec: 1, short: "Taille" },
+    head_cm:   { key: "hcfa", label: "Périmètre crânien", unit: "cm", dec: 1, short: "Tête" }
+  };
+  function loadWho() {
+    if (window.TRIBU_WHO) return Promise.resolve();
+    if (state.whoLoading) return state.whoLoading;
+    state.whoLoading = new Promise((res) => {
+      const s = document.createElement("script");
+      s.src = "vendor/who-growth.js?v=" + TRIBU_VERSION; s.onload = res; s.onerror = res;
+      document.head.appendChild(s);
+    });
+    return state.whoLoading;
+  }
+  const monthsAt = (birth, day) => (parseYmd(day) - parseYmd(birth)) / 86400000 / 30.4375;
+  function lms(metric, sex, m) {
+    const t = window.TRIBU_WHO && window.TRIBU_WHO[GROWTH[metric].key][sex];
+    if (!t || m < 0 || m > 60) return null;
+    const i = Math.floor(m), f = m - i, a = t[i], b = t[Math.min(60, i + 1)];
+    return a.map((v, k) => v + (b[k] - v) * f);
+  }
+  const lmsValue = ([L, M, S], z) => (L === 0 ? M * Math.exp(S * z) : M * Math.pow(1 + L * S * z, 1 / L));
+  const lmsZ = ([L, M, S], x) => (L === 0 ? Math.log(x / M) / S : (Math.pow(x / M, L) - 1) / (L * S));
+  // Fonction de répartition de la loi normale (approximation d'Abramowitz et Stegun)
+  function phi(z) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+  }
+  const childMeasures = (cid) => (state.measures || []).filter((x) => x.child_id === cid).sort((a, b) => a.measured_on.localeCompare(b.measured_on));
+  const fmtNum = (v, dec) => Number(v).toLocaleString("fr-FR", { maximumFractionDigits: dec });
+  function percentileText(c, metric, x) {
+    if (!c.sex || !c.birth_date) return "";
+    const p = lms(metric, c.sex, monthsAt(c.birth_date, x.measured_on));
+    if (!p) return "";
+    const pc = Math.round(phi(lmsZ(p, Number(x[metric]))) * 100);
+    if (pc < 3 || pc > 97) return "en dehors des repères habituels, à montrer au médecin";
+    return `environ ${pc}e percentile`;
+  }
+  function growthChart(c, metric) {
+    const list = childMeasures(c.id).filter((x) => x[metric] != null);
+    const W = 340, H = 210, L0 = 34, R0 = 8, T0 = 10, B0 = 26;
+    const nowM = c.birth_date ? monthsAt(c.birth_date, ymd(new Date())) : 0;
+    const lastM = list.length ? monthsAt(c.birth_date, list[list.length - 1].measured_on) : 0;
+    const xMax = Math.max(12, Math.ceil(Math.max(nowM, lastM) + 2));
+    const xMin = 0;
+    const bandsTo = Math.min(60, xMax);
+    const Z = [-1.881, -1.036, 0, 1.036, 1.881];
+    const curves = c.sex && window.TRIBU_WHO ? Z.map((z) => { const pts = []; for (let m = 0; m <= bandsTo; m += 0.5) { const p = lms(metric, c.sex, m); if (p) pts.push([m, lmsValue(p, z)]); } return pts; }) : [];
+    const vals = list.map((x) => Number(x[metric])).concat(curves.flat().map((p) => p[1]));
+    if (!vals.length) return "";
+    let yMin = Math.min(...vals), yMax = Math.max(...vals);
+    const pad = (yMax - yMin) * 0.06 || 1; yMin = Math.max(0, yMin - pad); yMax += pad;
+    const sx = (m) => L0 + (m - xMin) / (xMax - xMin) * (W - L0 - R0);
+    const sy = (v) => T0 + (1 - (v - yMin) / (yMax - yMin)) * (H - T0 - B0);
+    const path = (pts) => pts.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+    const area = (lo, hi) => path(lo) + hi.slice().reverse().map((p) => `L${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("") + "Z";
+    const step = xMax <= 24 ? 3 : xMax <= 60 ? 12 : 24;
+    const xt = []; for (let m = 0; m <= xMax; m += step) xt.push(m);
+    const ystep = (() => { const r = yMax - yMin; const raw = r / 6; const pow = Math.pow(10, Math.floor(Math.log10(raw))); return [1, 2, 2.5, 5, 10].map((k) => k * pow).find((k) => k >= raw); })();
+    const yt = []; for (let v = Math.ceil(yMin / ystep) * ystep; v <= yMax; v += ystep) yt.push(v);
+    const lab = (m) => m < 24 ? `${m} m` : `${m / 12} ans`;
+    const pts = list.map((x) => [monthsAt(c.birth_date, x.measured_on), Number(x[metric])]);
+    return `<svg viewBox="0 0 ${W} ${H}" class="growth-svg" role="img" aria-label="Courbe de ${GROWTH[metric].label.toLowerCase()} de ${esc(c.first_name)}">
+      ${yt.map((v) => `<line x1="${L0}" x2="${W - R0}" y1="${sy(v)}" y2="${sy(v)}" class="g-grid"/><text x="${L0 - 4}" y="${sy(v) + 3}" class="g-tx" text-anchor="end">${fmtNum(v, 1)}</text>`).join("")}
+      ${xt.map((m) => `<text x="${sx(m)}" y="${H - 8}" class="g-tx" text-anchor="middle">${lab(m)}</text>`).join("")}
+      ${curves.length ? `<path d="${area(curves[0], curves[4])}" class="g-band1"/><path d="${area(curves[1], curves[3])}" class="g-band2"/><path d="${path(curves[2])}" class="g-med"/>` : ""}
+      ${pts.length > 1 ? `<path d="${path(pts)}" fill="none" stroke="${esc(c.color)}" stroke-width="2.5" stroke-linejoin="round"/>` : ""}
+      ${pts.map((p) => `<circle cx="${sx(p[0])}" cy="${sy(p[1])}" r="4" fill="${esc(c.color)}" stroke="var(--surface)" stroke-width="1.5"/>`).join("")}
+    </svg>`;
+  }
+  function growthSectionHtml(c) {
+    if (isAdult(c) || !c.birth_date) return "";
+    if (!window.TRIBU_WHO) loadWho().then(() => { if (route()[0] === "enfant") render(); });
+    const list = childMeasures(c.id);
+    const metric = state.growthMetric && list.some((x) => x[state.growthMetric] != null) ? state.growthMetric
+      : ["weight_kg", "height_cm", "head_cm"].find((k) => list.some((x) => x[k] != null)) || "weight_kg";
+    let html = `<h2>📈 Croissance</h2><div class="card">`;
+    if (!c.sex) html += `<p class="small" style="margin-top:0">Pour comparer aux courbes de référence, indique si ${esc(c.first_name)} est une fille ou un garçon :</p>
+      <div class="seg" style="margin-bottom:12px"><button data-sex="${c.id}|f">Fille</button><button data-sex="${c.id}|m">Garçon</button></div>`;
+    if (!list.length) html += `<p class="muted small" style="margin-top:0">Note le poids, la taille et le périmètre crânien relevés chez le médecin (ils sont dans le carnet de santé) pour suivre la courbe de ${esc(c.first_name)}.</p>`;
+    else {
+      const avail = Object.keys(GROWTH).filter((k) => list.some((x) => x[k] != null));
+      if (avail.length > 1) html += `<div class="seg" style="margin-bottom:10px">${avail.map((k) => `<button data-gmetric="${k}" aria-pressed="${k === metric}">${GROWTH[k].short}</button>`).join("")}</div>`;
+      const last = list.filter((x) => x[metric] != null).pop();
+      const pt = percentileText(c, metric, last);
+      html += `<p style="margin:0 0 6px"><strong>${fmtNum(last[metric], GROWTH[metric].dec)} ${GROWTH[metric].unit}</strong> <span class="muted small">le ${fmtDate(parseYmd(last.measured_on))}${pt ? " · " + pt : ""}</span></p>`;
+      html += growthChart(c, metric);
+      html += `<p class="muted small" style="margin:4px 0 0">${c.sex && monthsAt(c.birth_date, ymd(new Date())) <= 62 ? "Zones : repères de l'OMS, du 3e au 97e percentile. Pointillés : la médiane (50e percentile)." : monthsAt(c.birth_date, ymd(new Date())) > 62 ? "Les repères de l'OMS s'arrêtent à 5 ans." : ""} Seul le médecin peut interpréter une courbe.</p>`;
+    }
+    html += `<div class="row" style="margin-top:12px"><button class="btn" data-measure-add="${c.id}">+ Ajouter une mesure</button>${list.length ? `<button class="btn ghost" data-measure-list="${c.id}">Historique</button>` : ""}</div></div>`;
+    return html;
+  }
+  function measureForm(cid, existing) {
+    const c = childById(cid);
+    const small = c.birth_date && monthsAt(c.birth_date, ymd(new Date())) < 48;
+    const v = (k) => existing && existing[k] != null ? String(existing[k]).replace(".", ",") : "";
+    openSheet(`<h2 style="margin-top:0">📈 Mesure · ${esc(c.first_name)}</h2><form id="mf">
+      <label for="mf-d">Date</label><input id="mf-d" type="date" required value="${existing ? existing.measured_on : ymd(new Date())}" max="${ymd(new Date())}" min="${c.birth_date || ""}">
+      <div class="row2"><div><label for="mf-w">Poids (kg)</label><input id="mf-w" inputmode="decimal" placeholder="Ex : 7,450" value="${v("weight_kg")}"></div>
+      <div><label for="mf-h">Taille (cm)</label><input id="mf-h" inputmode="decimal" placeholder="Ex : 68,5" value="${v("height_cm")}"></div></div>
+      ${small || (existing && existing.head_cm) ? `<label for="mf-c">Périmètre crânien (cm)</label><input id="mf-c" inputmode="decimal" placeholder="Ex : 43" value="${v("head_cm")}">` : ""}
+      <label for="mf-n">Note (facultatif)</label><input id="mf-n" maxlength="300" value="${esc(existing && existing.note || "")}" placeholder="Ex : visite des 6 mois">
+      <div class="actions">${existing ? `<button type="button" class="btn danger" id="mf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="mf-x">Annuler</button>`}<button class="btn" type="submit">Enregistrer</button></div></form>`, (el) => {
+      const x = el.querySelector("#mf-x"); if (x) x.onclick = closeSheet;
+      const del = el.querySelector("#mf-del");
+      if (del) del.onclick = async () => { if (!confirm("Supprimer cette mesure ?")) return; await sb.from("measures").delete().eq("id", existing.id); closeSheet(); await loadAll(); render(); toast("Mesure supprimée"); };
+      el.querySelector("#mf").onsubmit = async (e) => {
+        e.preventDefault();
+        const num = (id) => { const f = el.querySelector(id); if (!f || !f.value.trim()) return null; const n = Number(f.value.trim().replace(",", ".").replace(/\s/g, "")); return isFinite(n) && n > 0 ? n : NaN; };
+        let w = num("#mf-w"); const h = num("#mf-h"), hc = num("#mf-c");
+        if ([w, h, hc].some((n) => Number.isNaN(n))) return toast("Vérifie les chiffres saisis");
+        if (w != null && w > 200) w = w / 1000; // saisi en grammes
+        if (w == null && h == null && hc == null) return toast("Indique au moins une mesure");
+        if ((h != null && (h < 20 || h > 230)) || (hc != null && (hc < 20 || hc > 70)) || (w != null && w > 200)) return toast("Une valeur semble incorrecte");
+        const row = { measured_on: el.querySelector("#mf-d").value, weight_kg: w, height_cm: h, head_cm: hc, note: el.querySelector("#mf-n").value.trim() || null };
+        const { error } = existing ? await sb.from("measures").update(row).eq("id", existing.id)
+          : await sb.from("measures").insert({ ...row, household_id: c.household_id, child_id: cid, created_by: state.session.user.id });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast("Mesure enregistrée");
+      };
+    });
+  }
+  function measureList(cid) {
+    const c = childById(cid), list = childMeasures(cid).slice().reverse();
+    openSheet(`<h2 style="margin-top:0">📈 Mesures de ${esc(c.first_name)}</h2>
+      ${list.map((x) => `<button class="member mrow" data-medit="${x.id}"><span>${fmtDate(parseYmd(x.measured_on))}<br><span class="muted small">${esc(age(c.birth_date, parseYmd(x.measured_on)) || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
+        <span class="small" style="text-align:right">${[x.weight_kg != null ? fmtNum(x.weight_kg, 3) + " kg" : "", x.height_cm != null ? fmtNum(x.height_cm, 1) + " cm" : "", x.head_cm != null ? "PC " + fmtNum(x.head_cm, 1) + " cm" : ""].filter(Boolean).join("<br>")}</span></button>`).join("")}
+      <button class="btn ghost block" style="margin-top:12px" id="ml-close">Fermer</button>`, (el) => {
+      el.querySelector("#ml-close").onclick = closeSheet;
+      el.querySelectorAll("[data-medit]").forEach((b) => b.onclick = () => measureForm(cid, state.measures.find((x) => x.id === b.dataset.medit)));
     });
   }
 

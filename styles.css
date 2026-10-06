@@ -381,3 +381,13 @@ html:has(#app > .nav), html:has(#app > .nav) body { height: 100%; overflow: hidd
 .st-prevue { color: var(--accent-ink, #B86E00); }
 .st-faite { color: #2E8B3E; }
 .idea-st { margin: 8px 0 4px; width: auto; padding: 6px 10px; }
+
+/* Courbes de croissance */
+.growth-svg { width: 100%; height: auto; display: block; margin-top: 6px; }
+.g-grid { stroke: var(--line); stroke-width: 1; }
+.g-tx { font-size: 9px; fill: var(--ink-soft); }
+.g-band1 { fill: var(--accent); opacity: .13; }
+.g-band2 { fill: var(--accent); opacity: .2; }
+.g-med { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: .9; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mrow { width: 100%; background: none; border: 0; border-bottom: 1px solid var(--line); font: inherit; color: inherit; text-align: left; cursor: pointer; }

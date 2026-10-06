@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 29;
+  const TRIBU_VERSION = 30;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -369,7 +369,9 @@
 
   function renderAuth(mode) {
     const invite = pendingInvite();
-    const pk = pkSupported();
+    const inApp = detectEnv().inApp;
+    // Dans WhatsApp, Telegram, Instagram... Face ID ne marche pas toujours : mot de passe en secours
+    const pk = pkSupported() && !inApp;
     mode = mode || (invite ? "signup" : "home");
     if (!pk && mode === "home") mode = "login-pwd";
     if (!pk && mode === "signup") mode = "signup-pwd";
@@ -416,6 +418,7 @@
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
         ${invite || ls.get(PRO_LINK_KEY) ? "" : ls.get(WANT_PRO_KEY) ? proPill() : betaPill()}
         <div id="invite-banner"></div>
+        ${inApp ? `<div class="invite-banner"><strong>Ouvre Tribu dans ${detectEnv().ios ? "Safari" : "Chrome"}</strong><br>Tu es dans le navigateur de ${/WhatsApp/i.test(navigator.userAgent) ? "WhatsApp" : /Telegram/i.test(navigator.userAgent) ? "Telegram" : "l'application"} : Face ID et l'installation n'y fonctionnent pas. Appuie sur <strong>⋯</strong> ou <strong>⋮</strong>, puis "Ouvrir dans ${detectEnv().ios ? "Safari" : "Chrome"}".<br><button class="btn ghost" style="margin-top:10px" id="copy-app-link">🔗 Copier le lien</button><br><span class="small muted">Sinon, tu peux te connecter ici avec un email et un mot de passe.</span></div>` : ""}
         ${card}
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
         ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button><br>` : ""}
@@ -429,6 +432,8 @@
     const go = (id, m) => { const b = document.getElementById(id); if (b) b.onclick = () => renderAuth(m); };
     go("go-signup", "signup"); go("go-pwd", "login-pwd"); go("go-signup-pwd", "signup-pwd"); go("go-home", pk ? "home" : "login-pwd"); go("go-home2", "home");
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
+    const cal = document.getElementById("copy-app-link");
+    if (cal) cal.onclick = async () => { const u = "https://jeremstyke.github.io/tribu/" + (invite ? "?code=" + invite : ls.get(PRO_LINK_KEY) ? "?pro=" + ls.get(PRO_LINK_KEY) : ""); try { await navigator.clipboard.writeText(u); toast("Lien copié : colle-le dans " + (detectEnv().ios ? "Safari" : "Chrome")); } catch (_) { toast(u, 6000); } };
     if (!invite && ls.get(WANT_PRO_KEY)) refreshProPill(); else if (!invite) refreshBetaPill();
     const plc = ls.get(PRO_LINK_KEY);
     if (!invite && plc) sb.rpc("pro_preview", { p_code: plc }).then(({ data }) => {

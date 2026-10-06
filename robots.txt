@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://jeremstyke.github.io/tribu/sitemap.xml

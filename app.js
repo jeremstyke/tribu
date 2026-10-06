@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 21;
+  const TRIBU_VERSION = 22;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -254,7 +254,7 @@
           <a class="btn" href="https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent("Tribu, l'organisation de la famille")}" target="_blank" rel="noopener">✈️ Par Telegram</a>
           <button class="btn ghost" id="copy-link">🔗 Copier le lien</button>
         </div>
-        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a></p>
+        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a> · <a href="guides/" class="link">📚 Guides pour les parents</a></p>
       </div>`;
     refreshBetaPill();
     document.getElementById("copy-link").onclick = async () => {
@@ -399,7 +399,8 @@
         ${card}
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
         ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button><br>` : ""}
-        <a class="link" href="faq.html" style="display:inline-block">❓ Questions fréquentes</a>
+        <a class="link" href="faq.html" style="display:inline-block">❓ Questions fréquentes</a><br>
+        <a class="link" href="guides/" style="display:inline-block">📚 Guides pour les parents</a>
       </div>`;
 
     const err = document.getElementById("err");
@@ -776,6 +777,7 @@
         <p class="small" style="margin:4px 0 10px">Ouverte à ${BETA_LIMIT} familles pour l'instant. L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
+        <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pour les parents</a>
       </div>
       <div class="card">
         <h3>Inviter l'autre parent</h3>
@@ -1591,7 +1593,7 @@
     let html = `
       <button class="back" onclick="location.hash='#/enfant/${c.id}'">‹ ${esc(c.first_name)}</button>
       <header class="top"><h1>Vaccins</h1></header>
-      <div class="vac-info small">D'après le <strong>calendrier officiel 2026</strong> du ministère de la Santé. Tribu t'aide à suivre les rappels, mais ne remplace ni le carnet de santé ni l'avis de ton médecin, qui peut adapter le calendrier.${!isAdult(c) ? ` <strong>Obligatoire</strong> = exigé pour l'entrée en crèche ou à l'école.` : ""}</div>
+      <div class="vac-info small">D'après le <strong>calendrier officiel 2026</strong> du ministère de la Santé. Tribu t'aide à suivre les rappels, mais ne remplace ni le carnet de santé ni l'avis de ton médecin, qui peut adapter le calendrier.${!isAdult(c) ? ` <strong>Obligatoire</strong> = exigé pour l'entrée en crèche ou à l'école. <a href="guides/calendrier-vaccinal-2026.html" style="color:inherit;font-weight:600">Voir le calendrier complet ›</a>` : ""}</div>
       ${!isAdult(c) && born && ageM >= 24 && ageM < 60 ? `<div class="vac-info small" style="border-color:var(--accent)">Pour les enfants de 2 à 4 ans, un <strong>rattrapage des méningocoques ACWY et B</strong> est recommandé en 2026. Parles-en à ton médecin.</div>` : ""}
       ${pastMissing ? `<button class="btn ghost block" id="vac-catchup">Déjà à jour ? Tout cocher jusqu'à aujourd'hui (${pastMissing})</button>` : ""}`;
     ms.forEach((x) => {

@@ -1,0 +1,33 @@
+.guide { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; line-height: 1.65; }
+.guide h1 { font-size: 2.1rem; line-height: 1.15; margin: 10px 0 8px; }
+.guide h2 { margin-top: 34px; font-size: 1.4rem; }
+.guide h3 { margin: 18px 0 4px; }
+.guide a { color: inherit; font-weight: 600; }
+.guide .back { text-decoration: none; display: inline-block; }
+.guide .intro { font-size: 1.08rem; color: var(--ink-soft); }
+.guide .updated { font-size: .85rem; color: var(--ink-soft); }
+.guide ul, .guide ol { padding-left: 22px; }
+.guide li { margin: 4px 0; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 16px 18px; margin: 18px 0; }
+.box.warn { border-color: var(--accent); }
+.table-wrap { overflow-x: auto; margin: 14px 0; }
+.guide table { border-collapse: collapse; width: 100%; min-width: 480px; background: var(--surface); border-radius: var(--radius-sm); overflow: hidden; }
+.guide th, .guide td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: .95rem; }
+.guide th { background: var(--line); font-weight: 700; }
+.tag { display: inline-block; font-size: .72rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin: 2px 4px 2px 0; white-space: nowrap; }
+.tag.o { background: var(--accent); color: #1F2D4D; }
+.tag.r { border: 1px solid var(--line); color: var(--ink-soft); }
+.cta { background: var(--primary); color: var(--on-primary); border-radius: var(--radius-lg); padding: 22px 20px; margin: 34px 0 10px; }
+.cta h2 { margin: 0 0 6px; font-size: 1.35rem; }
+.cta p { margin: 0 0 14px; opacity: .9; }
+.cta a.btn { background: var(--accent); color: #1F2D4D; text-decoration: none; display: inline-block; }
+.guide-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.guide-list a { display: block; text-decoration: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 16px 18px; }
+.guide-list span { display: block; font-weight: 400; color: var(--ink-soft); font-size: .93rem; margin-top: 2px; }
+.more { margin-top: 30px; }
+.tool input[type=date] { width: 100%; max-width: 260px; }
+.tool .ms { border-left: 3px solid var(--line); padding: 6px 0 6px 14px; margin: 10px 0; }
+.tool .ms.past { opacity: .6; }
+.tool .ms.next { border-color: var(--accent); }
+.tool .ms strong { display: block; }
+footer.gfoot { margin-top: 40px; font-size: .85rem; color: var(--ink-soft); }

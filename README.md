@@ -36,3 +36,10 @@ Bêta ouverte à 100 familles pour l'instant. Tribu évolue chaque semaine. Un b
 ---
 
 by [@jeremstyke](https://t.me/jeremstyke) · © 2026 Jeremy (jeremstyke), tous droits réservés.
+
+## Guides pour les parents
+
+- [Calendrier vaccinal 2026](https://jeremstyke.github.io/tribu/guides/calendrier-vaccinal-2026.html)
+- [Suivi de bébé : biberons, couches, dodos](https://jeremstyke.github.io/tribu/guides/suivi-bebe-biberon-couches.html)
+- [Organiser les activités des enfants](https://jeremstyke.github.io/tribu/guides/planning-activites-enfants.html)
+- [Planning de garde alternée](https://jeremstyke.github.io/tribu/guides/garde-alternee-planning.html)

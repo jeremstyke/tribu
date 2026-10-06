@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 42;
+  const TRIBU_VERSION = 43;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -141,7 +141,7 @@
     const hid = state.household.id;
     const since = new Date(Date.now() - 4 * 86400000).toISOString();
     const fromDay = ymd(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1));
-    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms, ch, cd] = await Promise.all([
+    const [c, i, s, ph, lg, ac, tr, vc, sh, pr, ms, ch, cd, br] = await Promise.all([
       sb.from("children").select("*").eq("household_id", hid).order("created_at"),
       sb.from("items").select("*").eq("household_id", hid).order("due_at", { ascending: true, nullsFirst: false }),
       sb.from("shopping_items").select("*").eq("household_id", hid).order("created_at"),
@@ -154,8 +154,10 @@
       sb.from("presences").select("*").eq("household_id", hid).gte("day", fromDay).order("arrived_at"),
       sb.from("measures").select("*").eq("household_id", hid).order("measured_on"),
       sb.from("chores").select("*").eq("household_id", hid).order("created_at"),
-      sb.from("chore_done").select("*").eq("household_id", hid).gte("day", ymd(new Date(Date.now() - 35 * 86400000)))
+      sb.from("chore_done").select("*").eq("household_id", hid).gte("day", ymd(new Date(Date.now() - 35 * 86400000))),
+      sb.from("baby_reminders").select("*").eq("household_id", hid)
     ]);
+    state.babyRem = br.data || [];
     state.chores = ch.data || []; state.choreDone = cd.data || [];
     state.measures = ms.data || [];
     state.shares = sh.data || [];
@@ -248,7 +250,7 @@
     let timer;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(async () => { if (state.mode === "pro") return; await loadAll(); render(); }, 250); };
     state.channel = sb.channel("tribu-" + hid);
-    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures", "chores", "chore_done"].forEach((table) => {
+    ["children", "items", "shopping_items", "photos", "logs", "activities", "treatments", "vaccines_done", "presences", "child_shares", "measures", "chores", "chore_done", "baby_reminders"].forEach((table) => {
       state.channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `household_id=eq.${hid}` }, refresh);
     });
     state.channel.subscribe();
@@ -779,7 +781,7 @@
       <button class="btn ghost block" style="margin-top:10px" data-pdf-health="${c.id}">📄 Fiche santé en PDF</button>`;
     const band = ageBand(c);
     if (band === "bebe" || band === "petit") {
-      html += `<h2>Noter</h2>${quickGrid(c)}${statsHtml(babyStats(c))}<h2>Journal</h2>${journalHtml(c)}`;
+      html += `<h2>Noter</h2>${quickGrid(c)}${remLineHtml(c)}${statsHtml(babyStats(c))}<h2>Journal</h2>${journalHtml(c)}`;
     } else {
       html += `<h2>Santé rapide</h2>${quickGrid(c)}${statsHtml(babyStats(c))}${childLogs(c.id).length ? `<h2>Journal</h2>${journalHtml(c)}` : ""}`;
     }
@@ -2144,6 +2146,8 @@
     $app.querySelectorAll("[data-chore-toggle]").forEach((b) => b.onclick = () => { b.disabled = true; const [id, day] = b.dataset.choreToggle.split("|"); toggleChore(id, day); });
     { const pg = route()[0]; if (pg === "courses" || pg === "menage") ls.set("tribu_house_tab", pg); }
     $app.querySelectorAll("[data-measure-add]").forEach((b) => b.onclick = () => measureForm(b.dataset.measureAdd));
+    $app.querySelectorAll("[data-rem]").forEach((b) => b.onclick = () => remSheet(b.dataset.rem));
+    $app.querySelectorAll("[data-measure-birth]").forEach((b) => b.onclick = () => { const c = childById(b.dataset.measureBirth); measureForm(c.id, null, c.birth_date); });
     $app.querySelectorAll("[data-measure-list]").forEach((b) => b.onclick = () => measureList(b.dataset.measureList));
     $app.querySelectorAll("[data-gmetric]").forEach((b) => b.onclick = () => { state.growthMetric = b.dataset.gmetric; render(); });
     $app.querySelectorAll("[data-sex]").forEach((b) => b.onclick = async () => {
@@ -2996,11 +3000,12 @@
     const W = 340, H = 210, L0 = 34, R0 = 8, T0 = 10, B0 = 26;
     const nowM = c.birth_date ? monthsAt(c.birth_date, ymd(new Date())) : 0;
     const lastM = list.length ? monthsAt(c.birth_date, list[list.length - 1].measured_on) : 0;
-    const xMax = Math.max(12, Math.ceil(Math.max(nowM, lastM) + 2));
+    const base = Math.max(nowM, lastM);
+    const xMax = base < 6 ? Math.max(2, Math.ceil(base + 1)) : base < 24 ? Math.ceil(base + 2) : Math.ceil(base + 3);
     const xMin = 0;
     const bandsTo = Math.min(60, xMax);
     const Z = [-1.881, -1.036, 0, 1.036, 1.881];
-    const curves = c.sex && window.TRIBU_WHO ? Z.map((z) => { const pts = []; for (let m = 0; m <= bandsTo; m += 0.5) { const p = lms(metric, c.sex, m); if (p) pts.push([m, lmsValue(p, z)]); } return pts; }) : [];
+    const curves = c.sex && window.TRIBU_WHO ? Z.map((z) => { const pts = []; for (let m = 0; m <= bandsTo + 0.001; m += (bandsTo <= 6 ? 0.1 : 0.5)) { const p = lms(metric, c.sex, Math.min(m, bandsTo)); if (p) pts.push([m, lmsValue(p, z)]); } return pts; }) : [];
     const vals = list.map((x) => Number(x[metric])).concat(curves.flat().map((p) => p[1]));
     if (!vals.length) return "";
     let yMin = Math.min(...vals), yMax = Math.max(...vals);
@@ -3009,11 +3014,12 @@
     const sy = (v) => T0 + (1 - (v - yMin) / (yMax - yMin)) * (H - T0 - B0);
     const path = (pts) => pts.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
     const area = (lo, hi) => path(lo) + hi.slice().reverse().map((p) => `L${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("") + "Z";
-    const step = xMax <= 24 ? 3 : xMax <= 60 ? 12 : 24;
-    const xt = []; for (let m = 0; m <= xMax; m += step) xt.push(m);
+    const WK = 7 / 30.4375; // une semaine en mois
+    const step = xMax <= 4 ? 2 * WK : xMax <= 8 ? 1 : xMax <= 24 ? 3 : xMax <= 60 ? 12 : 24;
+    const xt = []; for (let m = 0; m <= xMax + 0.001; m += step) xt.push(m);
     const ystep = (() => { const r = yMax - yMin; const raw = r / 6; const pow = Math.pow(10, Math.floor(Math.log10(raw))); return [1, 2, 2.5, 5, 10].map((k) => k * pow).find((k) => k >= raw); })();
     const yt = []; for (let v = Math.ceil(yMin / ystep) * ystep; v <= yMax; v += ystep) yt.push(v);
-    const lab = (m) => m < 24 ? `${m} m` : `${m / 12} ans`;
+    const lab = (m) => xMax <= 4 ? `${Math.round(m / WK)} sem` : m < 24 ? `${Math.round(m)} m` : `${Math.round(m / 12)} ans`;
     const pts = list.map((x) => [monthsAt(c.birth_date, x.measured_on), Number(x[metric])]);
     return `<svg viewBox="0 0 ${W} ${H}" class="growth-svg" role="img" aria-label="Courbe de ${GROWTH[metric].label.toLowerCase()} de ${esc(c.first_name)}">
       ${yt.map((v) => `<line x1="${L0}" x2="${W - R0}" y1="${sy(v)}" y2="${sy(v)}" class="g-grid"/><text x="${L0 - 4}" y="${sy(v) + 3}" class="g-tx" text-anchor="end">${fmtNum(v, 1)}</text>`).join("")}
@@ -3032,7 +3038,9 @@
     let html = `<h2>📈 Croissance</h2><div class="card">`;
     if (!c.sex) html += `<p class="small" style="margin-top:0">Pour comparer aux courbes de référence, indique si ${esc(c.first_name)} est une fille ou un garçon :</p>
       <div class="seg" style="margin-bottom:12px"><button data-sex="${c.id}|f">Fille</button><button data-sex="${c.id}|m">Garçon</button></div>`;
+    const noBirth = !list.some((x) => x.measured_on === c.birth_date) && monthsAt(c.birth_date, ymd(new Date())) < 24;
     if (!list.length) html += `<p class="muted small" style="margin-top:0">Note le poids, la taille et le périmètre crânien relevés chez le médecin (ils sont dans le carnet de santé) pour suivre la courbe de ${esc(c.first_name)}.</p>`;
+    if (noBirth) html += `<button class="btn ghost block" style="margin-bottom:10px" data-measure-birth="${c.id}">👶 Ajouter les mesures de naissance</button>`;
     else {
       const avail = Object.keys(GROWTH).filter((k) => list.some((x) => x[k] != null));
       if (avail.length > 1) html += `<div class="seg" style="margin-bottom:10px">${avail.map((k) => `<button data-gmetric="${k}" aria-pressed="${k === metric}">${GROWTH[k].short}</button>`).join("")}</div>`;
@@ -3045,12 +3053,12 @@
     html += `<div class="row" style="margin-top:12px"><button class="btn" data-measure-add="${c.id}">+ Ajouter une mesure</button>${list.length ? `<button class="btn ghost" data-measure-list="${c.id}">Historique</button>` : ""}</div></div>`;
     return html;
   }
-  function measureForm(cid, existing) {
+  function measureForm(cid, existing, presetDay) {
     const c = childById(cid);
     const small = c.birth_date && monthsAt(c.birth_date, ymd(new Date())) < 48;
     const v = (k) => existing && existing[k] != null ? String(existing[k]).replace(".", ",") : "";
     openSheet(`<h2 style="margin-top:0">📈 Mesure · ${esc(c.first_name)}</h2><form id="mf">
-      <label for="mf-d">Date</label><input id="mf-d" type="date" required value="${existing ? existing.measured_on : ymd(new Date())}" max="${ymd(new Date())}" min="${c.birth_date || ""}">
+      <label for="mf-d">Date</label><input id="mf-d" type="date" required value="${existing ? existing.measured_on : presetDay || ymd(new Date())}" max="${ymd(new Date())}" min="${c.birth_date || ""}">
       <div class="row2"><div><label for="mf-w">Poids (kg)</label><input id="mf-w" inputmode="decimal" placeholder="Ex : 7,450" value="${v("weight_kg")}"></div>
       <div><label for="mf-h">Taille (cm)</label><input id="mf-h" inputmode="decimal" placeholder="Ex : 68,5" value="${v("height_cm")}"></div></div>
       ${small || (existing && existing.head_cm) ? `<label for="mf-c">Périmètre crânien (cm)</label><input id="mf-c" inputmode="decimal" placeholder="Ex : 43" value="${v("head_cm")}">` : ""}
@@ -3239,6 +3247,41 @@
           : await sb.from("chores").insert({ ...row, household_id: state.household.id, start_date: ymd(mondayOf(new Date())), created_by: state.session.user.id });
         if (error) return toast(errMsg(error));
         closeSheet(); await loadAll(); render(); toast("Tâche enregistrée");
+      };
+    });
+  }
+
+  // ---------- Rappels biberon et couche ----------
+  const FEED_OPTS = [[null, "Non"], [2, "2 h"], [2.5, "2 h 30"], [3, "3 h"], [3.5, "3 h 30"], [4, "4 h"]];
+  const DIAPER_OPTS = [[null, "Non"], [3, "3 h"], [4, "4 h"]];
+  const hLabel = (h) => (FEED_OPTS.concat(DIAPER_OPTS).find((o) => o[0] === Number(h)) || [0, h + " h"])[1];
+  const remOf = (cid) => (state.babyRem || []).find((r) => r.child_id === cid);
+  function remLineHtml(c) {
+    const r = remOf(c.id);
+    const parts = [];
+    if (r && r.feed_hours) parts.push("biberon toutes les " + hLabel(r.feed_hours));
+    if (r && r.diaper_hours) parts.push("couche toutes les " + hLabel(r.diaper_hours));
+    return `<button class="rem-line" data-rem="${c.id}"><span aria-hidden="true">🔔</span> ${parts.length ? "Rappel " + parts.join(" · ") + (r.quiet_night ? ", pas la nuit" : "") : "Me rappeler le prochain biberon et le change"} ›</button>`;
+  }
+  function remSheet(cid) {
+    const c = childById(cid), r = remOf(cid) || {};
+    let feed = r.feed_hours != null ? Number(r.feed_hours) : null, diaper = r.diaper_hours != null ? Number(r.diaper_hours) : null, quiet = r.quiet_night !== false;
+    const seg = (id, opts, cur) => `<div class="seg" id="${id}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${v === cur}">${l}</button>`).join("")}</div>`;
+    openSheet(`<h2 style="margin-top:0">🔔 Rappels pour ${esc(c.first_name)}</h2>
+      <p class="muted small" style="margin-top:0">Une notification arrive quand le temps est écoulé depuis le dernier biberon (ou tétée) et le dernier change notés. Toute la tribu la reçoit.</p>
+      <label>🍼 Biberon ou tétée, toutes les</label>${seg("rm-f", FEED_OPTS, feed)}
+      <label>🧷 Couche, toutes les</label>${seg("rm-d", DIAPER_OPTS, diaper)}
+      <label class="check-row" style="margin-top:14px"><input type="checkbox" id="rm-q" ${quiet ? "checked" : ""}> Pas de rappel la nuit (22 h - 7 h)</label>
+      ${state.pushOn ? "" : `<p class="small" style="color:var(--danger)">Active d'abord les notifications dans l'onglet Tribu, sinon les rappels n'arriveront pas.</p>`}
+      <div class="actions"><button type="button" class="btn ghost" id="rm-x">Annuler</button><button class="btn" id="rm-ok">Enregistrer</button></div>`, (el) => {
+      const pick = (id, set) => el.querySelector(id).onclick = (e) => { const b = e.target.closest("button"); if (!b) return; set(b.dataset.v === "null" ? null : Number(b.dataset.v)); el.querySelectorAll(id + " button").forEach((x) => x.setAttribute("aria-pressed", x === b)); };
+      pick("#rm-f", (v) => feed = v); pick("#rm-d", (v) => diaper = v);
+      el.querySelector("#rm-x").onclick = closeSheet;
+      el.querySelector("#rm-ok").onclick = async () => {
+        quiet = el.querySelector("#rm-q").checked;
+        const { error } = await sb.from("baby_reminders").upsert({ child_id: cid, household_id: c.household_id, feed_hours: feed, diaper_hours: diaper, quiet_night: quiet, updated_at: new Date().toISOString() });
+        if (error) return toast(errMsg(error));
+        closeSheet(); await loadAll(); render(); toast(feed || diaper ? "Rappels enregistrés" : "Rappels désactivés");
       };
     });
   }

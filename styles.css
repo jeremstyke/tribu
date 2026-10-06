@@ -413,3 +413,5 @@ html:has(#app > .nav), html:has(#app > .nav) body { height: 100%; overflow: hidd
 .wk-chip.done { text-decoration: line-through; opacity: .55; }
 .tpl { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .chip-t { font: inherit; font-size: .85rem; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 10px; cursor: pointer; color: inherit; }
+
+.rem-line { display: block; width: 100%; text-align: left; font: inherit; font-size: .9rem; font-weight: 600; color: var(--ink); background: var(--surface); border: 1.5px dashed var(--accent); border-radius: var(--radius-sm); padding: 12px 14px; margin: 12px 0 0; cursor: pointer; }

@@ -6,6 +6,8 @@
 
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
+  const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
+  const isAdult = (c) => c && c.kind === "adulte";
   const TYPES = {
     rdv:    { label: "Rendez-vous", ico: "📅" },
     tache:  { label: "Tâche",       ico: "✅" },
@@ -132,7 +134,7 @@
       sb.from("logs").select("*").eq("household_id", hid).gte("at", since).order("at", { ascending: false }).limit(1000),
       sb.from("activities").select("*").eq("household_id", hid).order("start_time")
     ]);
-    state.children = c.data || [];
+    state.children = (c.data || []).sort((a, b) => (a.kind === "adulte") - (b.kind === "adulte"));
     state.items = i.data || [];
     state.shopping = s.data || [];
     state.photos = ph.data || [];
@@ -244,7 +246,7 @@
       ${showFab ? `<button class="fab" id="fab" aria-label="Ajouter un élément">+</button>` : ""}
       <nav class="nav" aria-label="Navigation"><ul>
         ${navLink("accueil", "🏠", "Accueil", active)}
-        ${navLink("enfants", "👧", "Enfants", active)}
+        ${navLink("enfants", "👪", "Famille", active)}
         ${navLink("courses", "🛒", "Courses", active)}
         ${navLink("reglages", "⚙️", "Tribu", active)}
       </ul></nav>`;
@@ -505,7 +507,7 @@
     const all = `<button class="chip" data-filter="all" aria-pressed="${state.filter === "all"}"><div class="bubble" style="--c:var(--line)">👪</div><span>Tous</span></button>`;
     const kids = state.children.map((c) =>
       `<button class="chip" data-filter="${c.id}" aria-pressed="${state.filter === c.id}"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div><span>${esc(c.first_name)}</span></button>`).join("");
-    const add = withAdd ? `<button class="chip add" id="add-child"><div class="bubble">+</div><span>Enfant</span></button>` : "";
+    const add = withAdd ? `<button class="chip add" id="add-child"><div class="bubble">+</div><span>Ajouter</span></button>` : "";
     return `<div class="chips" role="group" aria-label="Filtrer par enfant">${all}${kids}${add}</div>`;
   }
 
@@ -582,20 +584,21 @@
   }
 
   function viewChildren() {
-    let html = `<header class="top"><h1>Enfants</h1></header>`;
-    if (!state.children.length) {
-      return html + `<div class="empty"><strong>Aucun enfant pour l'instant</strong><br>Ajoute chaque enfant pour suivre ses rendez-vous, sa santé et ses tailles.<br><button class="btn" id="add-child-empty">Ajouter un enfant</button></div>`;
-    }
-    html += state.children.map((c) => {
+    let html = `<header class="top"><h1>Famille</h1></header>`;
+    const card = (c) => {
       const n = state.items.filter((i) => i.child_id === c.id && i.due_at && new Date(i.due_at) >= startOfDay(new Date()) && !i.done).length;
       return `<a href="#/enfant/${c.id}" class="item" style="--c:${esc(c.color)};text-decoration:none;color:inherit">
         <div class="tab"></div>
         <div class="body" style="display:flex;align-items:center;gap:14px">
           <div class="bubble" style="width:48px;height:48px;border-radius:50%;background:${esc(c.color)};display:grid;place-items:center;font-size:1.5rem;flex:0 0 auto;overflow:hidden">${avatar(c)}</div>
-          <div><div class="title">${esc(c.first_name)}</div><div class="meta">${[age(c.birth_date), n ? n + " à venir" : ""].filter(Boolean).join(" · ") || "Aucun élément à venir"}</div></div>
+          <div><div class="title">${esc(c.first_name)}</div><div class="meta">${[c.birth_date ? age(c.birth_date) : "", n ? n + " à venir" : ""].filter(Boolean).join(" · ") || "Aucun élément à venir"}</div></div>
         </div></a>`;
-    }).join("");
-    html += `<button class="btn ghost block" style="margin-top:14px" id="add-child-empty">Ajouter un enfant</button>`;
+    };
+    const kids = state.children.filter((c) => !isAdult(c)), adults = state.children.filter(isAdult);
+    html += `<h2>Enfants</h2>${kids.length ? kids.map(card).join("") : `<p class="muted small">Aucun enfant pour l'instant.</p>`}
+      <button class="btn ghost block" data-add-profile="enfant">Ajouter un enfant</button>
+      <h2>Parents</h2>${adults.length ? adults.map(card).join("") : `<p class="muted small">Ajoute papa et maman pour suivre aussi leurs rendez-vous, leurs activités et leur santé.</p>`}
+      <button class="btn ghost block" data-add-profile="adulte">Ajouter un parent</button>`;
     return html;
   }
 
@@ -604,9 +607,9 @@
     if (!c) { location.hash = "#/enfants"; return ""; }
     const items = state.items.filter((i) => i.child_id === id);
     let html = `
-      <button class="back" onclick="history.length > 1 ? history.back() : (location.hash='#/enfants')">‹ Enfants</button>
+      <button class="back" onclick="history.length > 1 ? history.back() : (location.hash='#/enfants')">‹ Famille</button>
       <div class="child-head"><div class="bubble" style="--c:${esc(c.color)}">${avatar(c)}</div>
-        <div><h1>${esc(c.first_name)}</h1><div class="muted">${BAND_LABEL[ageBand(c)]} · ${age(c.birth_date) || "nouveau-né"}</div></div></div>
+        <div><h1>${esc(c.first_name)}</h1><div class="muted">${isAdult(c) ? "Parent" + (c.birth_date ? " · " + age(c.birth_date) : "") : BAND_LABEL[ageBand(c)] + " · " + (age(c.birth_date) || "nouveau-né")}</div></div></div>
       <div class="row" style="margin-top:8px"><button class="btn ghost" id="edit-child" data-id="${c.id}">Modifier</button><button class="btn" id="add-for-child" data-id="${c.id}">Ajouter</button></div>
       <button class="btn ghost block" style="margin-top:10px" data-cal="${c.id}">📆 Synchroniser avec mon calendrier</button>`;
     const band = ageBand(c);
@@ -703,7 +706,7 @@
         <button class="btn ghost block" style="margin-top:10px" id="export-data">Exporter mes données</button>
         <button class="btn danger block" style="margin-top:10px" id="delete-account">Supprimer mon compte</button>
       </div>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 14</p>`;
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 15</p>`;
   }
 
   // ---------- Notifications ----------
@@ -927,9 +930,9 @@
     if (n.getDate() < b.getDate()) m--;
     return Math.max(0, m);
   };
-  const BAND_LABEL = { bebe: "Bébé", petit: "Tout-petit", enfant: "Enfant", ado: "Ado" };
-  const ageBand = (c) => { const m = ageMonths(c.birth_date); return m < 12 ? "bebe" : m < 36 ? "petit" : m < 144 ? "enfant" : "ado"; };
-  const ALL = ["bebe", "petit", "enfant", "ado"];
+  const BAND_LABEL = { bebe: "Bébé", petit: "Tout-petit", enfant: "Enfant", ado: "Ado", adulte: "Adulte" };
+  const ageBand = (c) => { if (isAdult(c) || !c.birth_date) return "adulte"; const m = ageMonths(c.birth_date); return m < 12 ? "bebe" : m < 36 ? "petit" : m < 144 ? "enfant" : "ado"; };
+  const ALL = ["bebe", "petit", "enfant", "ado", "adulte"];
   const KINDS = {
     biberon:     { label: "Biberon",     ico: "🍼", bands: ["bebe", "petit"] },
     tetee:       { label: "Tétée",       ico: "🤱", bands: ["bebe", "petit"], maxMonths: 24 },
@@ -1368,12 +1371,15 @@
   }
 
   // ---------- Forms ----------
-  function childForm(child) {
-    const c = child || { first_name: "", birth_date: "", color: COLORS[state.children.length % COLORS.length], emoji: EMOJIS[state.children.length % EMOJIS.length] };
+  function childForm(child, kindPreset) {
+    let kind = child ? (child.kind || "enfant") : (kindPreset || "enfant");
+    const list = () => kind === "adulte" ? ADULT_EMOJIS : EMOJIS;
+    const c = child || { first_name: "", birth_date: "", color: COLORS[state.children.length % COLORS.length], emoji: list()[state.children.filter((x) => (x.kind || "enfant") === kind).length % list().length] };
     let color = c.color, emoji = c.emoji;
     openSheet(`
-      <h2 style="margin-top:0">${child ? "Modifier " + esc(child.first_name) : "Ajouter un enfant"}</h2>
+      <h2 style="margin-top:0">${child ? "Modifier " + esc(child.first_name) : "Ajouter à la famille"}</h2>
       <form id="cf">
+        ${child ? "" : `<div class="seg" id="cf-kind" role="group" aria-label="Type">${[["enfant", "👧 Un enfant"], ["adulte", "🧑 Un parent"]].map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${k === kind}">${l}</button>`).join("")}</div>`}
         <label for="cf-name">Prénom</label>
         <input id="cf-name" required maxlength="40" value="${esc(c.first_name)}">
         <label>Photo</label>
@@ -1384,13 +1390,13 @@
             <button type="button" class="link small" id="cf-rmphoto" ${child && child.photo_path ? "" : "hidden"}>Retirer la photo</button>
           </div>
         </div>
-        <label for="cf-birth">Date de naissance</label>
-        <input id="cf-birth" type="date" required max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.birth_date || "")}">
-        <p class="muted small" style="margin:6px 0 0">Les options s'adaptent à son âge : biberons, couches et dodos pour un bébé, rendez-vous et activités ensuite.</p>
+        <label for="cf-birth">Date de naissance <span class="muted" id="cf-birth-opt">${kind === "adulte" ? "(facultatif)" : ""}</span></label>
+        <input id="cf-birth" type="date" max="${new Date().toISOString().slice(0, 10)}" value="${esc(c.birth_date || "")}">
+        <p class="muted small" style="margin:6px 0 0" id="cf-birth-help">${kind === "adulte" ? "Ses rendez-vous, activités et soins apparaîtront avec sa couleur, comme pour les enfants." : "Les options s'adaptent à son âge : biberons, couches et dodos pour un bébé, rendez-vous et activités ensuite."}</p>
         <label>Couleur</label>
         <div class="swatches" id="cf-colors">${COLORS.map((x) => `<button type="button" style="--c:${x}" data-v="${x}" aria-label="Couleur ${x}" aria-pressed="${x === color}"></button>`).join("")}</div>
         <label>Avatar</label>
-        <div class="seg" id="cf-emojis">${EMOJIS.map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
+        <div class="seg" id="cf-emojis">${[...new Set([...list(), ...(child ? [emoji] : [])])].map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("")}</div>
         <div class="actions">
           ${child ? `<button type="button" class="btn danger" id="cf-del">Supprimer</button>` : `<button type="button" class="btn ghost" id="cf-cancel">Annuler</button>`}
           <button class="btn" type="submit">${child ? "Enregistrer" : "Ajouter"}</button>
@@ -1417,6 +1423,18 @@
       };
       pick(el.querySelector("#cf-colors"), (v) => { color = v; preview.style.background = v; });
       pick(el.querySelector("#cf-emojis"), (v) => { emoji = v; if (!preview.querySelector("img")) preview.textContent = v; });
+      const kindSeg = el.querySelector("#cf-kind");
+      if (kindSeg) kindSeg.addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        kind = b.dataset.v;
+        kindSeg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+        el.querySelector("#cf-birth-opt").textContent = kind === "adulte" ? "(facultatif)" : "";
+        el.querySelector("#cf-birth-help").textContent = kind === "adulte" ? "Ses rendez-vous, activités et soins apparaîtront avec sa couleur, comme pour les enfants." : "Les options s'adaptent à son âge : biberons, couches et dodos pour un bébé, rendez-vous et activités ensuite.";
+        emoji = list()[0];
+        const wrap = el.querySelector("#cf-emojis");
+        wrap.innerHTML = list().map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === emoji}">${x}</button>`).join("");
+        if (!preview.querySelector("img")) preview.textContent = emoji;
+      });
       const cancel = el.querySelector("#cf-cancel"); if (cancel) cancel.onclick = closeSheet;
       const del = el.querySelector("#cf-del");
       if (del) del.onclick = async () => {
@@ -1429,7 +1447,9 @@
       el.querySelector("#cf").onsubmit = async (e) => {
         e.preventDefault();
         const row = { first_name: el.querySelector("#cf-name").value.trim(), birth_date: el.querySelector("#cf-birth").value, color, emoji };
-        if (!row.birth_date) return toast("Indique sa date de naissance");
+        row.birth_date = row.birth_date || null;
+        if (!child) row.kind = kind;
+        if (kind !== "adulte" && !row.birth_date) return toast("Indique sa date de naissance");
         if (!row.first_name) return;
         const btn = el.querySelector("#cf button[type=submit]"); btn.disabled = true;
         const q = child
@@ -1466,7 +1486,7 @@
         <label for="itf-title">Intitulé</label>
         <input id="itf-title" required maxlength="200" value="${esc(it.title)}" placeholder="${placeholders[type]}">
         <label for="itf-child">Pour qui</label>
-        <select id="itf-child"><option value="">Toute la famille</option>${state.children.map((c) => `<option value="${c.id}" ${c.id === it.child_id ? "selected" : ""}>${esc(c.emoji)} ${esc(c.first_name)}</option>`).join("")}</select>
+        <select id="itf-child"><option value="">Toute la famille</option>${[["Enfants", state.children.filter((c) => !isAdult(c))], ["Parents", state.children.filter(isAdult)]].filter(([, l]) => l.length).map(([g, l]) => `<optgroup label="${g}">${l.map((c) => `<option value="${c.id}" ${c.id === it.child_id ? "selected" : ""}>${esc(c.emoji)} ${esc(c.first_name)}</option>`).join("")}</optgroup>`).join("")}</select>
         <div id="itf-date-wrap">
           <label for="itf-date">Date et heure <span class="muted" id="itf-opt">(facultatif)</span></label>
           <input id="itf-date" type="datetime-local" value="${toLocalInput(it.due_at)}">
@@ -1548,6 +1568,7 @@
       await sb.from("items").update({ done: it.done }).eq("id", it.id);
     });
     const ec = document.getElementById("edit-child"); if (ec) ec.onclick = () => childForm(childById(ec.dataset.id));
+    $app.querySelectorAll("[data-add-profile]").forEach((b) => b.onclick = () => childForm(null, b.dataset.addProfile));
     $app.querySelectorAll("[data-act-add]").forEach((b) => b.onclick = () => activityForm(b.dataset.actAdd));
     $app.querySelectorAll("[data-act]").forEach((b) => {
       const open = () => { const a = state.activities.find((x) => x.id === b.dataset.act); activityForm(a.child_id, a); };

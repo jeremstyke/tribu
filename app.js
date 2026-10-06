@@ -16,7 +16,7 @@
   const SHOP_CATS = ["Fruits & légumes", "Frais", "Épicerie", "Bébé", "Hygiène", "Maison", "Autre"];
 
   const state = {
-    session: null, household: null, me: null, members: [], memberships: [], passkeys: [],
+    session: null, household: null, me: null, members: [], memberships: [], passkeys: [], pushOn: false, notif: null,
     children: [], items: [], shopping: [], photos: [], logs: [], activities: [],
     filter: "all", channel: null, photoUrls: {}
   };
@@ -107,7 +107,7 @@
     const uid = state.session.user.id;
     const { data: mem } = await sb.from("members").select("household_id, display_name, role, households(name)").eq("user_id", uid).order("created_at");
     state.memberships = mem || [];
-    loadPasskeys().then(() => { if (state.household && route()[0] === "reglages") render(); });
+    Promise.all([loadPasskeys(), loadPushState()]).then(() => { if (state.household && ["reglages", "accueil", ""].includes(route()[0] || "")) render(); });
     if (!mem || !mem.length) { state.household = null; return; }
     state.me = mem.find((m) => m.household_id === ls.get(HID_KEY)) || mem[0];
     const hid = state.me.household_id;
@@ -359,7 +359,8 @@
         <p class="lead">Les enfants, les rendez-vous et les courses de toute la famille, au même endroit et à jour pour chaque parent.</p>
         <div id="invite-banner"></div>
         ${card}
-        ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:14px">📲 Comment installer Tribu sur mon téléphone</button>` : ""}
+        <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
+        ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button>` : ""}
       </div>`;
 
     const err = document.getElementById("err");
@@ -552,18 +553,7 @@
     let html = `
       <header class="top"><div><h1>${esc(state.household.name)}</h1><div class="date">${esc(dateStr.charAt(0).toUpperCase() + dateStr.slice(1))}</div></div></header>
       ${chipsHtml()}
-      ${!isStandalone() && !ls.get("tribu_install_hidden") ? `<div class="install-banner">
-        <span class="ib-ico" aria-hidden="true">📲</span>
-        <div class="ib-text"><strong>Installe Tribu</strong><br><span class="small">Elle s'ouvrira comme une vraie app depuis ton écran d'accueil.</span></div>
-        <button class="btn" data-install-help>Voir comment</button>
-        <button class="ib-close" id="install-dismiss" aria-label="Masquer">×</button>
-      </div>` : ""}
-      ${(isStandalone() || ls.get("tribu_install_hidden")) && pkSupported() && !state.passkeys.length && !ls.get("tribu_pk_hidden") ? `<div class="install-banner">
-        <span class="ib-ico" aria-hidden="true">🔐</span>
-        <div class="ib-text"><strong>Connexion avec ${bioLabel()}</strong><br><span class="small">Plus besoin de mot de passe sur ce téléphone.</span></div>
-        <button class="btn" id="pk-add">Activer</button>
-        <button class="ib-close" id="pk-dismiss" aria-label="Masquer">×</button>
-      </div>` : ""}`;
+      ${homeBanner()}`;
 
     state.children.filter((c) => (state.filter === "all" || state.filter === c.id) && ["bebe", "petit"].includes(ageBand(c))).forEach((c) => {
       html += `<section class="baby-card" style="--c:${esc(c.color)}">
@@ -684,6 +674,7 @@
         <p class="muted small" style="margin:14px 0 0">Ou donne-lui ce code, à saisir dans l'app :</p>
         <div class="code">${esc(state.household.invite_code)}</div>
       </div>
+      ${settingsNotifHtml()}
       <h2>Calendrier</h2>
       <div class="card">
         <p class="muted small" style="margin-top:0">Abonne ton calendrier à toute la tribu : les rendez-vous et éléments datés de tous les enfants s'y affichent et se mettent à jour tout seuls. Chaque enfant a aussi son propre calendrier depuis sa fiche.</p>
@@ -705,7 +696,149 @@
       <button class="btn ghost block" id="change-pwd">Changer mon mot de passe</button>
       <button class="btn ghost block" style="margin-top:10px" id="logout">Se déconnecter</button>
       <button class="btn danger block" style="margin-top:10px" id="leave">Quitter la tribu</button>
-      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 13</p>`;
+      <h2>Mes données</h2>
+      <div class="card">
+        <p class="muted small" style="margin-top:0">Tes données restent en France, ne sont jamais vendues ni utilisées pour de la publicité.</p>
+        <a class="btn ghost block" href="confidentialite.html">Politique de confidentialité</a>
+        <button class="btn ghost block" style="margin-top:10px" id="export-data">Exporter mes données</button>
+        <button class="btn danger block" style="margin-top:10px" id="delete-account">Supprimer mon compte</button>
+      </div>
+      <p class="muted small" style="text-align:center;margin-top:24px">Tribu version 14</p>`;
+  }
+
+  // ---------- Notifications ----------
+  const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  // Sur iPhone, les notifications ne marchent que dans l'app installée sur l'écran d'accueil
+  const pushNeedsInstall = () => detectEnv().ios && !isStandalone();
+  function b64uToU8(s) {
+    const p = (s + "===".slice((s.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(p); const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return u;
+  }
+  async function loadPushState() {
+    state.pushOn = false;
+    try {
+      if (pushSupported() && Notification.permission === "granted") {
+        const reg = await navigator.serviceWorker.ready;
+        state.pushOn = !!(await reg.pushManager.getSubscription());
+      }
+    } catch (_) {}
+    const { data } = await sb.from("notif_settings").select("*").maybeSingle();
+    state.notif = data || { rappels: true, activites: true, ajouts: true };
+  }
+  async function enablePush() {
+    // La demande d'autorisation doit partir directement du clic (exigence iPhone)
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error(perm === "denied" ? "push_denied" : "push_dismissed");
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { data, error } = await sb.functions.invoke("notify", { body: { action: "vapid-public" } });
+      if (error || !data || !data.key) throw new Error("server");
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(data.key) });
+    }
+    const j = sub.toJSON();
+    const { error } = await sb.from("push_subscriptions").upsert({ endpoint: j.endpoint, user_id: state.session.user.id, p256dh: j.keys.p256dh, auth: j.keys.auth, device: deviceName() }, { onConflict: "endpoint" });
+    if (error) throw error;
+    state.pushOn = true;
+  }
+  async function disablePush() {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
+    state.pushOn = false;
+  }
+  function pushError(e) {
+    const m = (e && e.message) || "";
+    if (m === "push_denied") return "Les notifications sont bloquées. Autorise-les dans les réglages du téléphone (Réglages > Notifications > Tribu), puis réessaie.";
+    if (m === "push_dismissed") return "Autorisation non accordée. Réessaie quand tu veux.";
+    return "Impossible d'activer les notifications. Réessaie dans un instant.";
+  }
+  async function onEnablePush(btn) {
+    if (pushNeedsInstall()) return installSheet();
+    if (btn) btn.disabled = true;
+    try { await enablePush(); render(); toast("Notifications activées"); }
+    catch (e) { toast(pushError(e), 5000); if (btn) btn.disabled = false; }
+  }
+
+  function homeBanner() {
+    const banner = (ico, title, text, btn, closeId) => `<div class="install-banner">
+        <span class="ib-ico" aria-hidden="true">${ico}</span>
+        <div class="ib-text"><strong>${title}</strong><br><span class="small">${text}</span></div>
+        ${btn}
+        <button class="ib-close" data-dismiss="${closeId}" aria-label="Masquer">×</button>
+      </div>`;
+    if (!isStandalone() && !ls.get("tribu_install_hidden"))
+      return banner("📲", "Installe Tribu", "Elle s'ouvrira comme une vraie app depuis ton écran d'accueil.", `<button class="btn" data-install-help>Voir comment</button>`, "tribu_install_hidden");
+    if (pushSupported() && !pushNeedsInstall() && !state.pushOn && Notification.permission !== "denied" && !ls.get("tribu_push_hidden"))
+      return banner("🔔", "Active les rappels", "RDV de demain, activité dans 1 h, ajouts de ton conjoint.", `<button class="btn" data-push-on>Activer</button>`, "tribu_push_hidden");
+    if (pkSupported() && !state.passkeys.length && !ls.get("tribu_pk_hidden"))
+      return banner("🔐", "Connexion avec " + bioLabel(), "Plus besoin de mot de passe sur ce téléphone.", `<button class="btn" id="pk-add">Activer</button>`, "tribu_pk_hidden");
+    return "";
+  }
+
+  function settingsNotifHtml() {
+    if (!pushSupported() && !pushNeedsInstall()) return `<h2>Notifications</h2><div class="card"><p class="muted small" style="margin:0">Ce navigateur ne permet pas les notifications. Installe Tribu sur ton écran d'accueil, ou utilise Safari ou Chrome à jour.</p></div>`;
+    const n = state.notif || { rappels: true, activites: true, ajouts: true };
+    const toggle = (key, label, sub) => `<label class="toggle"><span><strong>${label}</strong><br><span class="muted small">${sub}</span></span><input type="checkbox" data-notif="${key}" ${n[key] !== false ? "checked" : ""}><i aria-hidden="true"></i></label>`;
+    return `<h2>Notifications</h2><div class="card">
+      ${pushNeedsInstall() ? `<p class="muted small" style="margin-top:0">Sur iPhone, les notifications fonctionnent une fois Tribu installée sur l'écran d'accueil.</p><button class="btn block" data-install-help>📲 Installer Tribu</button>`
+        : state.pushOn ? `<p class="small" style="margin-top:0">✅ Activées sur cet appareil</p>`
+        : `<p class="muted small" style="margin-top:0">${typeof Notification !== "undefined" && Notification.permission === "denied" ? "Les notifications sont bloquées pour Tribu. Autorise-les dans les réglages du téléphone, puis appuie sur Activer." : "Reçois les rappels même quand l'app est fermée."}</p><button class="btn block" data-push-on>🔔 Activer sur cet appareil</button>`}
+      <div class="toggles">
+        ${toggle("rappels", "Rappels", "RDV la veille à 19 h et 1 h avant, tâches et soins à l'heure")}
+        ${toggle("activites", "Activités", "1 h avant, et \"c'est toi qui déposes / récupères\"")}
+        ${toggle("ajouts", "Ajouts de la tribu", "Quand un membre ajoute un RDV, une activité ou des photos")}
+      </div>
+      ${state.pushOn ? `<div class="row" style="margin-top:12px"><button class="btn ghost" id="push-test">Tester</button><button class="btn ghost" id="push-off">Désactiver ici</button></div>` : ""}
+    </div>`;
+  }
+
+  // ---------- Mes données (RGPD) ----------
+  async function exportData(btn) {
+    btn.disabled = true; btn.textContent = "Préparation...";
+    try {
+      const { data, error } = await sb.functions.invoke("account", { body: { action: "export" } });
+      if (error) throw error;
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const file = new File([blob], `tribu-mes-donnees-${ymd(new Date())}.json`, { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: "Mes données Tribu" }); } catch (_) {}
+      } else {
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+      toast("Export prêt. Les liens des photos sont valables 7 jours.", 4000);
+    } catch (_) { toast("L'export a échoué. Réessaie."); }
+    finally { btn.disabled = false; btn.textContent = "Exporter mes données"; }
+  }
+  function deleteAccountSheet() {
+    const alone = state.members.length <= 1;
+    openSheet(`
+      <h2 style="margin-top:0">Supprimer mon compte</h2>
+      <p>${alone
+        ? `Tu es le seul membre de <strong>${esc(state.household.name)}</strong> : la tribu, les enfants, les rendez-vous, les activités, le journal, l'album photo et les courses seront <strong>effacés définitivement</strong>.`
+        : `<strong>${esc(state.household.name)}</strong> sera conservée pour les autres membres. Ton compte, tes accès et tes appareils enregistrés seront effacés définitivement.`}</p>
+      <p class="muted small">Cette action est irréversible. Pense à exporter tes données avant si tu veux les garder.</p>
+      <label for="del-confirm">Pour confirmer, écris SUPPRIMER</label>
+      <input id="del-confirm" autocomplete="off" autocapitalize="characters">
+      <div id="del-err" class="error" hidden></div>
+      <div class="actions"><button class="btn ghost" id="del-cancel">Annuler</button><button class="btn danger" id="del-go">Supprimer définitivement</button></div>`, (el) => {
+      el.querySelector("#del-cancel").onclick = closeSheet;
+      el.querySelector("#del-go").onclick = async () => {
+        const err = el.querySelector("#del-err");
+        if (el.querySelector("#del-confirm").value.trim().toUpperCase() !== "SUPPRIMER") { err.hidden = false; err.textContent = "Écris SUPPRIMER pour confirmer."; return; }
+        const btn = el.querySelector("#del-go"); btn.disabled = true; btn.textContent = "Suppression...";
+        try { await disablePush(); } catch (_) {}
+        const { error } = await sb.functions.invoke("account", { body: { action: "delete", confirm: "SUPPRIMER" } });
+        if (error) { btn.disabled = false; btn.textContent = "Supprimer définitivement"; err.hidden = false; err.textContent = "La suppression a échoué. Réessaie."; return; }
+        ["tribu_hid", "tribu_invite", "tribu_install_hidden", "tribu_push_hidden", "tribu_pk_hidden"].forEach((k) => ls.set(k, null));
+        closeSheet();
+        await sb.auth.signOut();
+        toast("Ton compte a été supprimé.", 4000);
+      };
+    });
   }
 
   // ---------- Calendrier ----------
@@ -1476,10 +1609,24 @@
     const inst = document.getElementById("install");
     if (inst) inst.onclick = async () => { state.installPrompt.prompt(); state.installPrompt = null; render(); };
     $app.querySelectorAll("[data-install-help]").forEach((b) => b.onclick = installSheet);
-    const pkd = document.getElementById("pk-dismiss");
-    if (pkd) pkd.onclick = () => { ls.set("tribu_pk_hidden", "1"); render(); };
-    const ib = document.getElementById("install-dismiss");
-    if (ib) ib.onclick = () => { ls.set("tribu_install_hidden", "1"); render(); };
+    $app.querySelectorAll("[data-dismiss]").forEach((b) => b.onclick = () => { ls.set(b.dataset.dismiss, "1"); render(); });
+    $app.querySelectorAll("[data-push-on]").forEach((b) => b.onclick = () => onEnablePush(b));
+    const po = document.getElementById("push-off");
+    if (po) po.onclick = async () => { try { await disablePush(); } catch (_) {} render(); toast("Notifications désactivées sur cet appareil"); };
+    const pt = document.getElementById("push-test");
+    if (pt) pt.onclick = async () => {
+      pt.disabled = true;
+      const { data, error } = await sb.functions.invoke("notify", { body: { action: "test" } });
+      pt.disabled = false;
+      toast(error ? "Le test a échoué. Réessaie." : data && data.sent ? "Notification envoyée, elle arrive dans quelques secondes" : "Aucun appareil abonné. Appuie sur Activer.", 4000);
+    };
+    $app.querySelectorAll("[data-notif]").forEach((c) => c.onchange = async () => {
+      state.notif = { ...(state.notif || {}), [c.dataset.notif]: c.checked };
+      const { error } = await sb.from("notif_settings").upsert({ user_id: state.session.user.id, rappels: state.notif.rappels !== false, activites: state.notif.activites !== false, ajouts: state.notif.ajouts !== false, updated_at: new Date().toISOString() });
+      if (error) toast(errMsg(error));
+    });
+    const ex = document.getElementById("export-data"); if (ex) ex.onclick = () => exportData(ex);
+    const da = document.getElementById("delete-account"); if (da) da.onclick = deleteAccountSheet;
     const pka = document.getElementById("pk-add");
     if (pka) pka.onclick = async () => {
       pka.disabled = true;
@@ -1541,6 +1688,7 @@
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; });
   window.addEventListener("appinstalled", () => { state.installPrompt = null; closeSheet(); toast("Tribu est installée"); });
   if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.nav) location.hash = e.data.nav; });
     navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
       document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
     }).catch(() => {});

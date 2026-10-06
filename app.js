@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 39;
+  const TRIBU_VERSION = 40;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -276,7 +276,7 @@
           <a class="btn" href="https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent("Tribu, l'organisation de la famille")}" target="_blank" rel="noopener">✈️ Par Telegram</a>
           <button class="btn ghost" id="copy-link">🔗 Copier le lien</button>
         </div>
-        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a> · <a href="guides/" class="link">📚 Guides pour les parents</a> · <a href="pro.html" class="link">👩‍🍼 Tribu Pro</a></p>
+        <p style="margin-top:22px"><a href="faq.html" class="link">❓ Questions fréquentes</a> · <a href="guides/" class="link">📚 Guides pratiques</a> · <a href="pro.html" class="link">👩‍🍼 Tribu Pro</a></p>
       </div>`;
     refreshBetaPill();
     document.getElementById("copy-link").onclick = async () => {
@@ -444,7 +444,7 @@
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
         ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button><br>` : ""}
         <a class="link" href="faq.html" style="display:inline-block">❓ Questions fréquentes</a><br>
-        <a class="link" href="guides/" style="display:inline-block">📚 Guides pour les parents</a><br>
+        <a class="link" href="guides/" style="display:inline-block">📚 Guides pratiques</a><br>
         <a class="link" href="pro.html" style="display:inline-block">👩‍🍼 Assistante maternelle ou nounou ?</a>
       </div>`;
 
@@ -854,7 +854,7 @@
         <p class="small" style="margin:4px 0 10px">Ouverte à ${BETA_LIMIT} familles. <strong>Ta tribu fait partie des familles fondatrices : Tribu restera gratuit à vie pour vous, options payantes comprises.</strong> L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
         <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
-        <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pour les parents</a>
+        <a class="btn ghost block" style="margin-top:10px" href="guides/">📚 Guides pratiques</a>
       </div>
       ${newsCardHtml()}
       <div class="card">

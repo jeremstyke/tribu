@@ -42,6 +42,7 @@ by [@jeremstyke](https://t.me/jeremstyke) · © 2026 Jeremy (jeremstyke), tous d
 - [Calendrier vaccinal 2026](https://jeremstyke.github.io/tribu/guides/calendrier-vaccinal-2026.html)
 - [Suivi de bébé : biberons, couches, dodos](https://jeremstyke.github.io/tribu/guides/suivi-bebe-biberon-couches.html)
 - [Organiser les activités des enfants](https://jeremstyke.github.io/tribu/guides/planning-activites-enfants.html)
+- [Répartir les tâches ménagères dans le couple](https://jeremstyke.github.io/tribu/guides/organisation-couple-taches-menageres.html)
 - [Planning de garde alternée](https://jeremstyke.github.io/tribu/guides/garde-alternee-planning.html)
 
 ## Tribu Pro (bêta, 10 professionnels)

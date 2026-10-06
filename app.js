@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 17;
+  const TRIBU_VERSION = 18;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -365,7 +365,8 @@
         <div id="invite-banner"></div>
         ${card}
         <p class="muted small" style="margin-top:14px">En créant un compte, tu acceptes notre <a href="confidentialite.html" style="color:inherit">politique de confidentialité</a>. Tes données restent en France et ne sont jamais vendues.</p>
-        ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button>` : ""}
+        ${!isStandalone() ? `<button class="link" type="button" data-install-help style="margin-top:4px">📲 Comment installer Tribu sur mon téléphone</button><br>` : ""}
+        <a class="link" href="faq.html" style="display:inline-block">❓ Questions fréquentes</a>
       </div>`;
 
     const err = document.getElementById("err");
@@ -694,6 +695,7 @@
         <strong>Tribu est en version bêta</strong>
         <p class="small" style="margin:4px 0 10px">L'app évolue chaque semaine et quelques bugs peuvent encore se glisser. Ton avis aide énormément.</p>
         <a class="btn block" href="mailto:juryjeremy@gmail.com?subject=${encodeURIComponent("Tribu bêta : bug ou idée")}&body=${encodeURIComponent("\n\n---\nVersion " + TRIBU_VERSION + " · " + navigator.userAgent)}">Signaler un bug ou une idée</a>
+        <a class="btn ghost block" style="margin-top:10px" href="faq.html">❓ Questions fréquentes</a>
       </div>
       <div class="card">
         <h3>Inviter l'autre parent</h3>
@@ -935,7 +937,7 @@
         ])}`;
     } else {
       body = `${state.installPrompt ? `<button class="btn block" id="install-now">Installer maintenant</button>` : ""}
-        <p>Sur ordinateur, avec Chrome ou Edge : clique sur l'icône d'installation à droite de la barre d'adresse, puis sur <strong>Installer</strong>.</p>
+        <p>Sur ordinateur, Tribu marche directement dans le navigateur. Pour l'avoir comme une application, avec Chrome ou Edge : clique sur l'icône d'installation à droite de la barre d'adresse, puis sur <strong>Installer</strong>.</p>
         <p class="muted small">Sur ton téléphone, ouvre ${esc(location.origin + location.pathname)} et appuie sur "Installer Tribu".</p>`;
     }
     openSheet(`<h2 style="margin-top:0">Installer Tribu</h2>${body}

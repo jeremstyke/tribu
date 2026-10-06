@@ -44,6 +44,6 @@ by [@jeremstyke](https://t.me/jeremstyke) · © 2026 Jeremy (jeremstyke), tous d
 - [Organiser les activités des enfants](https://jeremstyke.github.io/tribu/guides/planning-activites-enfants.html)
 - [Planning de garde alternée](https://jeremstyke.github.io/tribu/guides/garde-alternee-planning.html)
 
-## Tribu Pro (bêta, 15 professionnels)
+## Tribu Pro (bêta, 10 professionnels)
 
 Espace pour les assistantes maternelles, nounous et micro-crèches : arrivées et départs, heures du mois, journal, traitements et cahier de liaison avec les parents. [En savoir plus](https://jeremstyke.github.io/tribu/pro.html)

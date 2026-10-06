@@ -4,7 +4,7 @@
   const sb = window.supabase.createClient(window.TRIBU_CONFIG.supabaseUrl, window.TRIBU_CONFIG.supabaseKey);
   const $app = document.getElementById("app");
 
-  const TRIBU_VERSION = 26;
+  const TRIBU_VERSION = 27;
   const COLORS = ["#E4572E", "#F2A541", "#3FA34D", "#2E86AB", "#8E4585", "#E86A92", "#6C757D", "#17BEBB"];
   const EMOJIS = ["🙂", "😎", "🦁", "🐻", "🦊", "🐼", "🐣", "🌟", "⚽", "🎨", "🚀", "🦄"];
   const ADULT_EMOJIS = ["👩", "👨", "🧔", "👱‍♀️", "👱", "🧑", "👵", "👴", "💪", "☕", "🌻", "⭐"];
@@ -2222,7 +2222,7 @@
   }
 
   // ---------- Espace pro (assistantes maternelles, nounous, micro-crèches) ----------
-  let PRO_LIMIT = 15;
+  let PRO_LIMIT = 10;
   const PRO_KINDS = { assmat: "Assistante maternelle", nounou: "Nounou à domicile", creche: "Micro-crèche" };
   async function proSpots() {
     try { const { data } = await sb.rpc("pro_spots"); if (data) { state.proBeta = data; if (data.limit) PRO_LIMIT = data.limit; } } catch (_) {}
